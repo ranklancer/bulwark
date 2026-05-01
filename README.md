@@ -11,10 +11,10 @@ on failure.
 It is the spiritual successor to Watchtower (archived December 2025) and goes
 substantially further: every update is _understood_ before it is applied.
 
-> **Status:** early development. The risk classifier and configuration loader
-> are implemented and tested; the daemon, snapshot backends, notifier
-> channels, and web UI are arriving in subsequent phases. See
-> [the roadmap](#roadmap) for the implementation plan.
+> **Status:** early development. The risk classifier, configuration loader,
+> OCI registry client, and GitHub release-notes fetcher are implemented and
+> tested. The daemon, snapshot backends, notifier channels, and web UI are
+> arriving in subsequent phases. See [the roadmap](#roadmap) for the plan.
 
 ---
 
@@ -57,7 +57,11 @@ and per-container Docker labels.
 > available today.
 
 ```sh
-# Try the classifier directly:
+# Live check: resolve digests in the registry, fetch GitHub release notes,
+# and classify the resulting update. Works against any OCI-compliant registry.
+bulwark check lscr.io/linuxserver/sonarr:4.0.9-ls45 4.0.10-ls46
+
+# Offline classify: skip the network and classify on semver alone.
 bulwark classify \
   --from "lscr.io/linuxserver/sonarr:4.0.9-ls45" \
   --to   "lscr.io/linuxserver/sonarr:4.0.10-ls46"
@@ -67,6 +71,13 @@ bulwark validate-config --config ./bulwark.yaml
 
 # Show version:
 bulwark version
+```
+
+`check` emits the assessment as JSON, suitable for piping into shell tooling:
+
+```sh
+bulwark check ghcr.io/owner/app:1.2.3 2.0.0 | jq '.level'
+# "breaking"
 ```
 
 When the daemon ships, the standard deployment will be:
@@ -131,14 +142,15 @@ The same scan runs in CI.
 
 ## Roadmap
 
-| Phase | Scope                                       | Status   |
-| ----- | ------------------------------------------- | -------- |
-| 1     | Scaffolding, classifier, config, CLI        | shipped  |
-| 2     | Release-notes fetcher, approval queue, DIUN | next     |
-| 3     | Snapshot backends (ZFS, Btrfs, volume)      | next     |
-| 4     | Native Slack/Discord/HA/SMTP notifications  | planned  |
-| 5     | Web UI, HTTP API, WebSocket                 | planned  |
-| 6     | Hooks, scheduling, multi-arch images        | planned  |
+| Phase | Scope                                                  | Status   |
+| ----- | ------------------------------------------------------ | -------- |
+| 1     | Scaffolding, classifier, config, CLI                   | shipped  |
+| 2a    | OCI registry client + GitHub release-notes + `check`   | shipped  |
+| 2b    | Docker socket integration, scanner, approval queue     | next     |
+| 3     | Snapshot backends (ZFS, Btrfs, volume)                 | planned  |
+| 4     | Native Slack/Discord/HA/SMTP notifications             | planned  |
+| 5     | Web UI, HTTP API, WebSocket                            | planned  |
+| 6     | Hooks, scheduling, multi-arch images                   | planned  |
 
 ## License
 
