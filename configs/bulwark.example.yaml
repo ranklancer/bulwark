@@ -1,0 +1,172 @@
+# Bulwark configuration — every field has a sensible default. Start with this
+# example and remove blocks you don't need. All examples below use RFC-reserved
+# IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) and example.com domains.
+
+# How Bulwark connects to Docker.
+docker:
+  host: unix:///var/run/docker.sock
+  tls:
+    enabled: false
+    cert: ""
+    key: ""
+    ca: ""
+
+# When to scan for updates and when to actually apply them.
+schedule:
+  check: "0 */6 * * *"          # check every 6 hours
+  maintenance_windows:
+    - start: "02:00"
+      end:   "06:00"
+      days:  [monday, tuesday, wednesday, thursday, friday]
+    - start: "00:00"
+      end:   "23:59"
+      days:  [saturday, sunday]
+
+# Risk classification policy.
+classification:
+  # Fallback risk level when the classifier cannot infer a kind.
+  default_risk: review
+
+  # Phrases in release notes that escalate the assessment to BREAKING.
+  # Leave commented to use the built-in defaults; uncomment to override.
+  # breaking_keywords:
+  #   - "breaking change"
+  #   - "incompatible"
+  #   - "removed support for"
+
+  # Phrases that escalate the assessment to at least REVIEW.
+  # migration_keywords:
+  #   - "migration required"
+  #   - "schema change"
+
+  # Phrases that annotate the assessment but do not change the level.
+  # security_keywords:
+  #   - "cve-"
+  #   - "security fix"
+
+  # Image-repository prefixes published by LSIO-style "rebuilders". For images
+  # from these registries, a digest-only change is treated as a base-image
+  # refresh rather than an opaque update.
+  trusted_rebuilders:
+    - "lscr.io/linuxserver/"
+    - "ghcr.io/linuxserver/"
+
+  # Map ChangeKind to RiskLevel. SAFE → auto-update, REVIEW → notify and
+  # await approval, BREAKING → block until manually forced.
+  policies:
+    patch:        safe
+    minor:        review
+    major:        breaking
+    digest:       safe
+    latest:       review
+    lsio_rebuild: safe
+    prerelease:   review
+
+  # Maximum length of the release-notes excerpt embedded in notifications.
+  changelog_max_chars: 500
+
+# Filesystem-level snapshot integration. Backends: zfs, btrfs, lvm, restic,
+# volume (Docker volume export), or "none" to disable.
+snapshots:
+  backend: none
+  zfs:
+    datasets: []
+  btrfs:
+    subvolumes: []
+  restic:
+    repository: ""
+    password_file: ""
+  retention:
+    keep_last: 5
+    keep_days: 30
+
+# Post-update health verification.
+health:
+  timeout:      120s
+  interval:     5s
+  threshold:    3
+  grace_period: 10s
+
+# Notification channels. Disabled by default — enable each channel you want.
+notifications:
+  homeassistant:
+    enabled: false
+    url:     "http://homeassistant.example.com:8123"
+    token:   "${BULWARK_HASS_TOKEN}"   # env-var substitution keeps secrets out of YAML
+    safe:
+      persistent: true
+      push:       false
+    review:
+      persistent: true
+      push:       true
+    breaking:
+      persistent: true
+      push:       true
+      critical:   true
+    rollback:
+      persistent: true
+      push:       true
+      critical:   true
+
+  slack:
+    enabled:     false
+    webhook_url: "${BULWARK_SLACK_WEBHOOK}"
+    channel:     ""
+
+  discord:
+    enabled:     false
+    webhook_url: "${BULWARK_DISCORD_WEBHOOK}"
+
+  smtp:
+    enabled:  false
+    host:     "smtp.example.com"
+    port:     587
+    username: "bulwark@example.com"
+    password: "${BULWARK_SMTP_PASSWORD}"
+    from:     "bulwark@example.com"
+    to:       ["ops@example.com"]
+    tls:      true
+
+  shoutrrr:
+    enabled: false
+    urls:    []
+
+  digest:
+    enabled:  false
+    schedule: "0 8 * * *"
+
+# Per-stack and per-container policy overrides. Container patterns support
+# globs ("*-db" matches "postgres-db", "redis-db", etc.).
+overrides:
+  stacks:
+    # Treat critical infrastructure as breaking by default — never auto-update.
+    authentik:      { risk_override: breaking }
+    home-assistant: { risk_override: breaking }
+    vaultwarden:    { risk_override: breaking }
+  containers:
+    "*-db":
+      risk_override:    review
+      pre_update_hook:  /hooks/db-backup.sh
+    "redis-*":
+      classification_policy:
+        patch: safe
+        minor: safe
+        major: review
+
+# Stacks/containers/images Bulwark must never touch.
+exclude:
+  stacks: []
+  containers: []
+  images: []
+
+# HTTP API and embedded web UI.
+api:
+  enabled: true
+  listen:  ":8080"
+  auth:
+    type: none                        # none | basic | oidc
+
+# Structured logging configuration.
+logging:
+  level:  info                        # debug | info | warn | error
+  format: json                        # json | text

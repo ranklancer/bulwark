@@ -1,0 +1,145 @@
+# Bulwark
+
+> **Don't just update. Understand what changed.**
+
+Bulwark is an intelligent Docker container update guardian. It watches your
+container registries, classifies the risk of each pending update by reading
+release notes and comparing semantic versions, takes filesystem-level
+snapshots, applies the update, verifies health, and rolls back automatically
+on failure.
+
+It is the spiritual successor to Watchtower (archived December 2025) and goes
+substantially further: every update is _understood_ before it is applied.
+
+> **Status:** early development. The risk classifier and configuration loader
+> are implemented and tested; the daemon, snapshot backends, notifier
+> channels, and web UI are arriving in subsequent phases. See
+> [the roadmap](#roadmap) for the implementation plan.
+
+---
+
+## Why Bulwark?
+
+The most-requested Watchtower features were never delivered:
+
+| Feature                          | Watchtower | Drydock | DockMon | **Bulwark** |
+| -------------------------------- | ---------- | ------- | ------- | ----------- |
+| Detect updates                   | ✓          | ✓       | ✓       | ✓           |
+| Risk-classify updates            | —          | partial | —       | ✓           |
+| Read release notes               | —          | —       | —       | ✓           |
+| Filesystem snapshots (ZFS/Btrfs) | —          | —       | —       | ✓           |
+| Health-verified rollback         | —          | image   | image   | ✓ (FS)      |
+| Compose-aware                    | partial    | ✓       | ✓       | ✓           |
+| Per-container policies           | binary     | basic   | basic   | rich        |
+| Rich notifications               | basic      | basic   | basic   | per-channel |
+| Pre/post hooks                   | partial    | —       | —       | ✓           |
+
+## Three-tier risk classification
+
+Every update is sorted into one of three buckets:
+
+- **SAFE** — auto-update. Patch version bumps, image rebuilds without version
+  changes, LinuxServer.io `-ls<n>` rebuilds.
+- **REVIEW** — notify and wait for explicit approval. Minor version bumps,
+  `:latest`-tag movements, anything mentioning "migration required" in the
+  release notes.
+- **BREAKING** — block until the user forces it. Major version bumps, anything
+  mentioning "breaking change" or "incompatible" in the release notes.
+
+The risk level is chosen using a configurable policy. The classifier reads
+release notes from GitHub Releases and DockerHub descriptions, scans them for
+breaking-change keywords, and combines that with semantic-version analysis
+and per-container Docker labels.
+
+## Quick start
+
+> The daemon is not yet runnable end-to-end. The CLI subcommands below are
+> available today.
+
+```sh
+# Try the classifier directly:
+bulwark classify \
+  --from "lscr.io/linuxserver/sonarr:4.0.9-ls45" \
+  --to   "lscr.io/linuxserver/sonarr:4.0.10-ls46"
+
+# Validate a config file:
+bulwark validate-config --config ./bulwark.yaml
+
+# Show version:
+bulwark version
+```
+
+When the daemon ships, the standard deployment will be:
+
+```sh
+docker compose -f docker-compose.example.yaml up -d
+```
+
+with a `bulwark.yaml` derived from
+[`configs/bulwark.example.yaml`](configs/bulwark.example.yaml).
+
+## How it works
+
+```
+┌─────────────────┐   ┌──────────────┐   ┌────────────┐
+│ Registry watcher│──▶│  Classifier  │──▶│ Snapshot   │
+│ (or DIUN hook)  │   │  (this MVP)  │   │ orchestrator│
+└─────────────────┘   └──────────────┘   └────────────┘
+                                                │
+                                                ▼
+┌──────────────┐   ┌─────────────────┐   ┌────────────┐
+│ Notification │◀──│ Health verifier │◀──│  Updater   │
+│ dispatcher   │   │ + Rollback ctlr │   │ (compose)  │
+└──────────────┘   └─────────────────┘   └────────────┘
+```
+
+When an update is detected for a container, Bulwark:
+
+1. Looks up the matching policy (YAML config + per-container Docker labels).
+2. Asks the classifier to assess the risk (semver delta + release-notes scan).
+3. Routes the update through the SAFE / REVIEW / BREAKING path.
+4. For SAFE updates: takes a snapshot, runs pre-hooks, pulls and recreates the
+   container, polls health checks, runs post-hooks. On health failure, restores
+   the snapshot and notifies.
+5. For REVIEW updates: queues the update for human approval and notifies with
+   full context (version delta, release notes excerpt, link).
+6. For BREAKING updates: blocks the update and sends a critical alert.
+
+## Configuration
+
+See [`configs/bulwark.example.yaml`](configs/bulwark.example.yaml) for the
+full list of options. Highlights:
+
+- Per-stack and per-container policy overrides.
+- Maintenance windows (only update during low-traffic periods).
+- Trusted-rebuilder list (LSIO `-ls<n>` rebuilds are SAFE by default).
+- Environment-variable substitution for secrets (`token: ${HASS_TOKEN}`).
+- Custom keyword lists for breaking-change detection.
+
+## Privacy and PII
+
+The codebase is checked by [`scripts/check-pii.sh`](scripts/check-pii.sh):
+no real IPv4 addresses (only RFC-reserved ranges), no real email addresses
+(only documentation domains), no real domain names. Install the pre-commit
+hook with:
+
+```sh
+./scripts/install-hooks.sh
+```
+
+The same scan runs in CI.
+
+## Roadmap
+
+| Phase | Scope                                       | Status   |
+| ----- | ------------------------------------------- | -------- |
+| 1     | Scaffolding, classifier, config, CLI        | shipped  |
+| 2     | Release-notes fetcher, approval queue, DIUN | next     |
+| 3     | Snapshot backends (ZFS, Btrfs, volume)      | next     |
+| 4     | Native Slack/Discord/HA/SMTP notifications  | planned  |
+| 5     | Web UI, HTTP API, WebSocket                 | planned  |
+| 6     | Hooks, scheduling, multi-arch images        | planned  |
+
+## License
+
+[MIT](LICENSE).

@@ -1,0 +1,55 @@
+# Example deployment of Bulwark. Adapt the volume mounts and security_opt
+# block to your environment. All addresses below use RFC-reserved ranges.
+#
+# Quick start:
+#   1. Copy configs/bulwark.example.yaml to ./config/bulwark.yaml
+#   2. Adjust the config to match your environment
+#   3. docker compose -f docker-compose.example.yaml up -d
+#   4. Visit http://localhost:8080 once the API server is implemented
+
+services:
+  bulwark:
+    image: ghcr.io/bulwark-docker/bulwark:latest
+    container_name: bulwark
+    restart: unless-stopped
+    volumes:
+      # Read-only Docker socket access — Bulwark only mutates Docker via this.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./config:/config
+      - ./data:/data
+    environment:
+      - TZ=UTC
+      - BULWARK_CONFIG=/config/bulwark.yaml
+      # Secrets passed via environment, referenced from YAML with ${VAR} syntax.
+      # - BULWARK_HASS_TOKEN=
+      # - BULWARK_SLACK_WEBHOOK=
+      # - BULWARK_DISCORD_WEBHOOK=
+      # - BULWARK_SMTP_PASSWORD=
+    ports:
+      - "8080:8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # ZFS snapshot backend requires either:
+    #   (a) mounting the host's ZFS tools and /dev/zfs, or
+    #   (b) running the container with --privileged.
+    # Option (a) is preferred — uncomment if needed:
+    # volumes:
+    #   - /usr/sbin/zfs:/usr/sbin/zfs:ro
+    #   - /usr/sbin/zpool:/usr/sbin/zpool:ro
+    #   - /dev/zfs:/dev/zfs
+
+    labels:
+      bulwark.enable: "false"   # Bulwark does not update itself
+
+# To take advantage of per-container Bulwark labels on your other services:
+#   labels:
+#     bulwark.enable: "true"
+#     bulwark.risk: "review"
+#     bulwark.schedule: "0 3 * * 0"
+#     bulwark.hook.pre-update: "/hooks/drain.sh"
+#     bulwark.hook.post-update: "/hooks/warm.sh"
+#     bulwark.hook.rollback: "/hooks/alert.sh"
+#     bulwark.health.timeout: "300s"
+#     bulwark.snapshot.dataset: "pool/docker/myapp"
