@@ -7,9 +7,11 @@
 //	bulwark classify             run the classifier offline against two image references
 //	bulwark check                resolve digests via the registry, fetch release notes,
 //	                             and classify the resulting update
+//	bulwark scan                 enumerate local containers, check the registry for
+//	                             digest movements, and report pending updates
 //
-// The "run" daemon depends on Docker socket integration and is wired in a
-// subsequent phase.
+// The "run" daemon (continuous scheduling, approval queue, snapshot orchestration)
+// is wired in a subsequent phase.
 package main
 
 import (
@@ -66,6 +68,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdClassify(args[1:], stdout, stderr)
 	case "check":
 		return cmdCheck(args[1:], stdout, stderr)
+	case "scan":
+		return cmdScan(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -84,6 +88,7 @@ Commands:
   validate-config     Parse a config file and report validation result
   classify            Classify a hypothetical image update (offline, no network)
   check               Resolve registry digests, fetch release notes, and classify
+  scan                Scan local Docker containers for pending updates
 
 Run "bulwark <command> --help" for command-specific options.`)
 }
