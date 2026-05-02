@@ -29,10 +29,11 @@ type Server struct {
 // NewServer wires the routes onto a fresh ServeMux and returns a Server
 // listening on addr. Routes registered:
 //
-//	POST /api/v1/webhooks/diun     DIUN webhook receiver (when h is non-nil)
+//	POST /api/v1/webhooks/diun     DIUN webhook receiver (when DIUNHandler is non-nil)
 //	GET  /healthz                  liveness probe
 //	GET  /readyz                   readiness probe
-func NewServer(addr string, diun *DIUNHandler, logger *slog.Logger) *Server {
+//	{state endpoints}              when StateHandler is non-nil — see StateHandler.Register
+func NewServer(addr string, diun *DIUNHandler, state *StateHandler, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -41,6 +42,9 @@ func NewServer(addr string, diun *DIUNHandler, logger *slog.Logger) *Server {
 	mux.HandleFunc("GET /readyz", handleHealth)
 	if diun != nil {
 		mux.Handle("POST /api/v1/webhooks/diun", diun)
+	}
+	if state != nil {
+		state.Register(mux)
 	}
 
 	return &Server{

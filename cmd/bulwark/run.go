@@ -266,7 +266,8 @@ Flags:`)
 		DedupTTL:   *dedupTTL,
 		Now:        deps.Now,
 	}
-	srv := api.NewServer(*listen, diun, logger)
+	state := &api.StateHandler{Store: st, Logger: logger, Token: *diunToken}
+	srv := api.NewServer(*listen, diun, state, logger)
 
 	// --- Set up parent context (signals or injected) --------------------
 	var ctx context.Context

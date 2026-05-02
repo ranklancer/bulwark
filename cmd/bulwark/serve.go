@@ -165,7 +165,8 @@ Flags:`)
 		DedupTTL:   *dedupTTL,
 	}
 
-	srv := api.NewServer(*listen, diun, logger)
+	state := &api.StateHandler{Store: st, Logger: logger, Token: *diunToken}
+	srv := api.NewServer(*listen, diun, state, logger)
 
 	// Production: translate SIGINT/SIGTERM into context cancellation.
 	// Tests: a parent context provided through deps.Ctx is used directly so

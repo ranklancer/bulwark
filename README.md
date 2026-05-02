@@ -207,7 +207,8 @@ The same scan runs in CI.
 | 3     | Update orchestration: pull + recreate + health + rollback | shipped |
 | 4     | Filesystem snapshot backends (ZFS, Btrfs)                | shipped  |
 | 5     | Pre/post/rollback update hooks                           | shipped  |
-| 6     | Web UI (HTTP API + React dashboard)                      | next     |
+| 6     | HTTP REST API for state inspection + decisions           | shipped  |
+| 7     | React/Tailwind web dashboard on top of the API           | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |
