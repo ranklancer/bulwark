@@ -199,10 +199,24 @@ type APIConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Listen  string `yaml:"listen"`
 	Auth    struct {
-		Type     string `yaml:"type"`
-		Username string `yaml:"username"`
+		Type         string `yaml:"type"`
+		Username     string `yaml:"username"`
 		PasswordHash string `yaml:"password_hash"`
 	} `yaml:"auth"`
+	// DIUN configures the DIUN-compatibility webhook receiver mounted at
+	// POST /api/v1/webhooks/diun. The endpoint is enabled whenever the
+	// API server is enabled; the Token field optionally requires a
+	// shared secret on each call.
+	DIUN APIDIUNConfig `yaml:"diun"`
+}
+
+type APIDIUNConfig struct {
+	// Token is an optional shared secret. When set, requests must include
+	// it via either `Authorization: Bearer <token>` or `X-Bulwark-Token`.
+	Token string `yaml:"token"`
+	// DedupTTL controls per-event silencing when persistent state is
+	// configured. Zero or empty disables dedup.
+	DedupTTL string `yaml:"dedup_ttl"`
 }
 
 type LoggingConfig struct {

@@ -184,6 +184,16 @@ api:
   auth:
     type: none                        # none | basic | oidc
 
+  # DIUN-compatibility webhook receiver at POST /api/v1/webhooks/diun.
+  # Lets users with existing DIUN deployments plug Bulwark in as the
+  # "brain" without changing their notification setup.
+  diun:
+    # Optional shared secret. When set, DIUN must include it on each call
+    # via Authorization: Bearer <token> or X-Bulwark-Token. Empty = anonymous.
+    token: "${BULWARK_DIUN_TOKEN}"
+    # Per-event silencing when --data-dir is configured. "0" disables.
+    dedup_ttl: "24h"
+
 # Structured logging configuration.
 logging:
   level:  info                        # debug | info | warn | error

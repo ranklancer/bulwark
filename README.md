@@ -11,12 +11,13 @@ on failure.
 It is the spiritual successor to Watchtower (archived December 2025) and goes
 substantially further: every update is _understood_ before it is applied.
 
-> **Status:** early development. The risk classifier, configuration loader,
-> OCI registry client, GitHub release-notes fetcher, Docker socket client,
-> one-shot scanner, notification dispatcher (Slack / Discord / generic JSON
-> webhooks), persistent state (notification dedup with TTL, scan history),
-> and the `history` CLI are implemented and tested. The continuously-running
-> daemon, snapshot backends, and web UI arrive in subsequent phases.
+> **Status:** early development. Shipped: risk classifier; YAML config;
+> OCI registry client; GitHub release-notes fetcher; Docker socket client;
+> one-shot scanner; notification dispatcher (Slack / Discord / generic JSON
+> webhooks); persistent state (notification dedup with TTL, scan history);
+> long-running HTTP server with a DIUN-compatible webhook receiver. Up
+> next: the continuously-running scan daemon, update orchestration with
+> health-verified rollback, snapshot backends, and the web UI.
 
 ---
 
@@ -77,6 +78,13 @@ bulwark history prune --keep 30 --data-dir ./data
 # Send a synthetic event to every configured channel — useful for verifying
 # webhook URLs and per-channel formatting without waiting for a real update.
 bulwark notify-test --config ./bulwark.yaml
+
+# Run the long-running HTTP server. Currently exposes a DIUN-compatible
+# webhook receiver so existing DIUN deployments can plug Bulwark in as the
+# "brain" without changing their notification setup.
+bulwark serve --config ./bulwark.yaml --data-dir ./data
+#   POST /api/v1/webhooks/diun    DIUN webhook receiver
+#   GET  /healthz, /readyz        liveness / readiness probes
 
 # Live check for a specific update: resolve digests in the registry,
 # fetch GitHub release notes, classify the resulting update.
@@ -170,7 +178,8 @@ The same scan runs in CI.
 | 2b    | Docker socket client, container scanner, `scan` command  | shipped  |
 | 2c    | Notifier dispatcher (Slack/Discord/generic), `--notify`  | shipped  |
 | 2d    | Persistent state (dedup + history), `bulwark history`    | shipped  |
-| 2e    | Approval queue, DIUN webhook receiver                    | next     |
+| 2e    | HTTP server, DIUN webhook receiver, `bulwark serve`      | shipped  |
+| 2f    | Continuously-running scan daemon, approval queue         | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |

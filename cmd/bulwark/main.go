@@ -13,6 +13,9 @@
 //	                             reporting per-channel success
 //	bulwark history              inspect and manage persistent state — scan history,
 //	                             notification dedup memory, retention pruning
+//	bulwark serve                run the long-running HTTP server. Currently exposes
+//	                             a DIUN-compatible webhook receiver so existing DIUN
+//	                             deployments can plug Bulwark in as the "brain"
 //
 // The "run" daemon (continuous scheduling, approval queue, snapshot orchestration)
 // is wired in a subsequent phase.
@@ -78,6 +81,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdNotifyTest(args[1:], stdout, stderr)
 	case "history":
 		return cmdHistory(args[1:], stdout, stderr)
+	case "serve":
+		return cmdServe(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -99,6 +104,7 @@ Commands:
   scan                Scan local Docker containers for pending updates
   notify-test         Send a synthetic event to every configured notifier
   history             Inspect and manage persistent scan history & dedup state
+  serve               Run the long-running HTTP server (DIUN webhook receiver)
 
 Run "bulwark <command> --help" for command-specific options.`)
 }
