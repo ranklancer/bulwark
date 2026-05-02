@@ -47,8 +47,16 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 		if !eligibleForApply(r, st) {
 			continue
 		}
-		logger.Info("apply: starting", "container", r.Container.Name, "image", r.Container.Image, "level", r.Assessment.Level.String())
-		res := u.Apply(ctx, r.Container.ID, r.Reference.String())
+		opts := updater.ApplyOptions{}
+		// The bulwark.snapshot.dataset label tells us which filesystem
+		// path/dataset to snapshot. Without a label the snapshot step is
+		// skipped — only container-level rollback applies.
+		if ds := r.Container.Labels["bulwark.snapshot.dataset"]; ds != "" {
+			opts.SnapshotTarget = ds
+			opts.SnapshotLabel = r.Container.Name
+		}
+		logger.Info("apply: starting", "container", r.Container.Name, "image", r.Container.Image, "level", r.Assessment.Level.String(), "snapshot_target", opts.SnapshotTarget)
+		res := u.ApplyWithOptions(ctx, r.Container.ID, r.Reference.String(), opts)
 		oc := applyOutcome{
 			NewImage:   res.NewImage,
 			OldImage:   res.OldImage,

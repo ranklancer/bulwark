@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/snapshot"
 )
 
 // DockerClient is the subset of *docker.Client the updater drives. The
@@ -45,6 +46,13 @@ type DockerClient interface {
 type Updater struct {
 	Docker DockerClient
 	Logger *slog.Logger
+
+	// Snapshots, when set, takes a filesystem snapshot of SnapshotTarget
+	// before the recreate dance. On health failure the snapshot is
+	// restored before the container-level rollback finishes; on success
+	// the snapshot is destroyed. Setting Snapshots without setting
+	// SnapshotTarget on an Apply call is a no-op for that call.
+	Snapshots snapshot.Backend
 
 	// HealthTimeout is the upper bound on how long we wait for the new
 	// container to become healthy. Zero means use the default (60s).
@@ -74,14 +82,41 @@ type Result struct {
 	NewImage       string
 	HealthStatus   docker.HealthStatus
 	RolledBack     bool
-	Err            error
+
+	// SnapshotID is the ID of the pre-update filesystem snapshot, when
+	// one was taken. On success it has been destroyed; on rollback it has
+	// been restored. Always empty when no Snapshots backend was active or
+	// no SnapshotTarget was supplied.
+	SnapshotID string
+
+	Err error
+}
+
+// ApplyOptions controls the Apply flow per call. Most fields are optional —
+// a zero ApplyOptions still produces a reasonable update.
+type ApplyOptions struct {
+	// SnapshotTarget tells the configured snapshot backend what to snap.
+	// Zero string means "no snapshot for this update". Backends interpret
+	// this string in their own terms (ZFS dataset, Btrfs subvolume path,
+	// etc.).
+	SnapshotTarget string
+
+	// SnapshotLabel is a free-form label embedded in the snapshot name,
+	// useful when listing snapshots later. Defaults to the container name.
+	SnapshotLabel string
 }
 
 // Apply runs the full pull + recreate + verify + (rollback) pipeline.
-// The targetImage is the new image reference (e.g. "lscr.io/.../sonarr:4.0.11-ls47").
+// The targetImage is the new image reference. ApplyOptions can be passed
+// via ApplyWithOptions; this method delegates with zero options.
+func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Result {
+	return u.ApplyWithOptions(ctx, containerID, targetImage, ApplyOptions{})
+}
+
+// ApplyWithOptions runs the full update pipeline with the specified options.
 // The returned Result is always non-zero — Err is set when the update was
 // not successful (whether or not rollback succeeded).
-func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Result {
+func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage string, opts ApplyOptions) Result {
 	logger := u.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -113,10 +148,34 @@ func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Re
 		return res
 	}
 
+	// --- 2.5. Take a filesystem snapshot, if configured ---------------------
+	// We do this AFTER inspect (so we know we'll proceed) but BEFORE
+	// stopping the container, so the snapshot captures a quiescent-as-
+	// possible state of the volume. (We can't quiesce running data without
+	// stopping the container; this is a best-effort point-in-time copy.)
+	if u.Snapshots != nil && opts.SnapshotTarget != "" {
+		label := opts.SnapshotLabel
+		if label == "" {
+			label = originalName
+		}
+		snapID, err := u.Snapshots.Snapshot(ctx, opts.SnapshotTarget, label)
+		if err != nil {
+			// Snapshot failure aborts BEFORE we've made any container-level
+			// changes, so there's nothing to roll back. Surface clearly.
+			res.Err = fmt.Errorf("snapshot: %w", err)
+			return res
+		}
+		res.SnapshotID = snapID
+		logger.Info("updater: filesystem snapshot taken", "id", snapID, "target", opts.SnapshotTarget)
+	}
+
 	// --- 3. Stop the old container -----------------------------------------
 	logger.Info("updater: stopping old container", "container", originalName, "id", insp.ID)
 	if err := u.Docker.StopContainer(ctx, insp.ID, u.StopTimeoutSec); err != nil {
 		res.Err = fmt.Errorf("stop old: %w", err)
+		// We've taken a snapshot but haven't recreated; clean it up so we
+		// don't leak resources on retried updates.
+		u.tryDestroySnapshot(ctx, &res, logger)
 		return res
 	}
 
@@ -132,14 +191,14 @@ func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Re
 	// --- 5. Create the new container ---------------------------------------
 	createCfg, err := docker.NewCreateConfigFromInspect(insp, targetImage)
 	if err != nil {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", res.SnapshotID, logger)
 		res.RolledBack = true
 		res.Err = fmt.Errorf("build create config: %w", err)
 		return res
 	}
 	newID, err := u.Docker.CreateContainer(ctx, originalName, createCfg)
 	if err != nil {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", res.SnapshotID, logger)
 		res.RolledBack = true
 		res.Err = fmt.Errorf("create new: %w", err)
 		return res
@@ -148,7 +207,7 @@ func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Re
 
 	// --- 6. Start the new container ----------------------------------------
 	if err := u.Docker.StartContainer(ctx, newID); err != nil {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, logger)
 		res.RolledBack = true
 		res.Err = fmt.Errorf("start new: %w", err)
 		return res
@@ -158,7 +217,7 @@ func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Re
 	healthy, finalStatus, healthErr := u.waitForHealthy(ctx, newID)
 	res.HealthStatus = finalStatus
 	if !healthy {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, logger)
 		res.RolledBack = true
 		if healthErr != nil {
 			res.Err = fmt.Errorf("health: %w", healthErr)
@@ -168,22 +227,41 @@ func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Re
 		return res
 	}
 
-	// --- 8. Cleanup: remove the preserved old container --------------------
+	// --- 8. Cleanup: remove the preserved old container + snapshot --------
 	if err := u.Docker.RemoveContainer(ctx, insp.ID, true); err != nil {
 		// We don't roll back here — the new container is healthy. Leaving
 		// the old one around as orphan is recoverable; the user can
 		// `docker rm` it manually. Surface as a non-fatal warning.
 		logger.Warn("updater: failed to remove preserved old container", "id", insp.ID, "err", err)
 	}
+	u.tryDestroySnapshot(ctx, &res, logger)
 	logger.Info("updater: update applied", "container", originalName, "new_id", newID, "old_id", insp.ID)
 	return res
 }
 
+// tryDestroySnapshot is a best-effort cleanup of a successfully-applied
+// or aborted snapshot. Failures are warnings, never fatal — the data has
+// already been preserved by the rollback / has been superseded by a
+// successful update.
+func (u *Updater) tryDestroySnapshot(ctx context.Context, res *Result, logger *slog.Logger) {
+	if u.Snapshots == nil || res.SnapshotID == "" {
+		return
+	}
+	if err := u.Snapshots.Destroy(ctx, res.SnapshotID); err != nil {
+		logger.Warn("updater: failed to destroy filesystem snapshot", "id", res.SnapshotID, "err", err)
+	}
+}
+
 // rollbackPreserved reverses a partially-completed update. The new
-// container (if created) is removed; the preserved old container is
-// renamed back to its original name and started.
-func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, preservedName, newID string, logger *slog.Logger) error {
-	logger.Warn("updater: rolling back", "old_id", oldID, "new_id", newID)
+// container (if created) is removed; the filesystem snapshot (if taken)
+// is restored; the preserved old container is renamed back to its
+// original name and started.
+//
+// Order matters: restore the FS snapshot BEFORE starting the old container
+// so it sees the rolled-back state of its volumes. The old container itself
+// is unchanged by the snapshot restore — we're rolling back the data.
+func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, preservedName, newID, snapshotID string, logger *slog.Logger) error {
+	logger.Warn("updater: rolling back", "old_id", oldID, "new_id", newID, "snapshot", snapshotID)
 
 	// Use a fresh context with a generous timeout so an outer cancellation
 	// doesn't strand us mid-rollback. Rollback must complete even on
@@ -199,6 +277,13 @@ func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, pr
 		}
 		if err := u.Docker.RemoveContainer(rbCtx, newID, true); err != nil {
 			rbErrs = append(rbErrs, "remove new: "+err.Error())
+		}
+	}
+	if u.Snapshots != nil && snapshotID != "" {
+		if err := u.Snapshots.Restore(rbCtx, snapshotID); err != nil {
+			rbErrs = append(rbErrs, "restore snapshot: "+err.Error())
+		} else {
+			logger.Info("updater: filesystem snapshot restored", "id", snapshotID)
 		}
 	}
 	if err := u.Docker.RenameContainer(rbCtx, oldID, originalName); err != nil {

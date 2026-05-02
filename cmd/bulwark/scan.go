@@ -20,6 +20,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
+	"github.com/bulwark-docker/bulwark/internal/snapshot"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
 	"github.com/bulwark-docker/bulwark/pkg/types"
@@ -173,8 +174,10 @@ Flags:`)
 		// *docker.Client provides. Production paths construct a real client
 		// when --apply is set; tests inject one via deps.
 		if dc, ok := dockerClient.(*docker.Client); ok {
+			snapBackend := buildSnapshotBackend(loaded, logger)
 			upd = &updater.Updater{
 				Docker:        dc,
+				Snapshots:     snapBackend,
 				Logger:        logger,
 				HealthTimeout: *healthTimeout,
 			}
@@ -243,6 +246,31 @@ func filterByDedup(st *store.Store, events []notifier.Event, now time.Time, ttl 
 		kept = append(kept, e)
 	}
 	return kept, silenced
+}
+
+// buildSnapshotBackend reads the snapshots.backend YAML field and returns
+// the matching backend, or nil if disabled / unsupported on this host.
+// Failures are warnings — the daemon falls back to "no snapshots" rather
+// than aborting startup.
+func buildSnapshotBackend(loaded *config.Config, logger *slog.Logger) snapshot.Backend {
+	if loaded == nil {
+		return nil
+	}
+	name := loaded.Snapshots.Backend
+	b, err := snapshot.New(name)
+	if err != nil {
+		logger.Warn("snapshots: invalid backend; running without snapshots", "name", name, "err", err)
+		return nil
+	}
+	if b == nil {
+		return nil
+	}
+	if !b.Available(context.Background()) {
+		logger.Warn("snapshots: backend unavailable on this host; running without snapshots", "backend", b.Name())
+		return nil
+	}
+	logger.Info("snapshots: backend ready", "backend", b.Name())
+	return b
 }
 
 // filterByApproval drops events for which the user has already recorded

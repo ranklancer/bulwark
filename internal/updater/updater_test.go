@@ -10,7 +10,43 @@ import (
 	"time"
 
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/snapshot"
 )
+
+// fakeSnapshotBackend is a programmable snapshot.Backend for updater tests.
+type fakeSnapshotBackend struct {
+	snapshots []string // ids of snapshots taken
+	restored  []string // ids restored
+	destroyed []string // ids destroyed
+
+	failOnSnapshot bool
+	failOnRestore  bool
+}
+
+func (f *fakeSnapshotBackend) Name() string                                 { return "fake" }
+func (f *fakeSnapshotBackend) Available(_ context.Context) bool             { return true }
+func (f *fakeSnapshotBackend) List(_ context.Context, _ string) ([]snapshot.Snapshot, error) {
+	return nil, nil
+}
+func (f *fakeSnapshotBackend) Snapshot(_ context.Context, target, label string) (string, error) {
+	if f.failOnSnapshot {
+		return "", errors.New("snapshot failed")
+	}
+	id := target + "@bulwark-" + label
+	f.snapshots = append(f.snapshots, id)
+	return id, nil
+}
+func (f *fakeSnapshotBackend) Restore(_ context.Context, id string) error {
+	if f.failOnRestore {
+		return errors.New("restore failed")
+	}
+	f.restored = append(f.restored, id)
+	return nil
+}
+func (f *fakeSnapshotBackend) Destroy(_ context.Context, id string) error {
+	f.destroyed = append(f.destroyed, id)
+	return nil
+}
 
 // fakeDocker is a programmable test double for the Docker client. Each
 // method records the calls it received and consults a dispatch table for
@@ -223,6 +259,165 @@ func TestApply_HappyPath_WithHealthcheck(t *testing.T) {
 }
 
 // --- rollback paths ---------------------------------------------------------
+
+func TestApplyWithOptions_TakesSnapshotAndDestroysOnSuccess(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "lscr.io/.../sonarr:1.0"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+	snap := &fakeSnapshotBackend{}
+	u := &Updater{
+		Docker:         fd,
+		Snapshots:      snap,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "lscr.io/.../sonarr:1.1",
+		ApplyOptions{SnapshotTarget: "tank/data/sonarr", SnapshotLabel: "pre"})
+	if res.Err != nil {
+		t.Fatalf("Apply: %v\nops: %v", res.Err, fd.ops)
+	}
+	if res.SnapshotID == "" {
+		t.Error("expected SnapshotID set on Result")
+	}
+	if len(snap.snapshots) != 1 {
+		t.Errorf("expected 1 snapshot taken, got %d", len(snap.snapshots))
+	}
+	if len(snap.destroyed) != 1 {
+		t.Errorf("expected 1 snapshot destroyed on success, got %d", len(snap.destroyed))
+	}
+	if len(snap.restored) != 0 {
+		t.Errorf("snapshot must NOT be restored on success; got %d restores", len(snap.restored))
+	}
+}
+
+func TestApplyWithOptions_RestoresSnapshotOnHealthFailure(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus {
+		if i == 0 {
+			return docker.HealthNone
+		}
+		return docker.HealthUnhealthy
+	}
+	snap := &fakeSnapshotBackend{}
+	u := &Updater{
+		Docker:         fd,
+		Snapshots:      snap,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:2.0",
+		ApplyOptions{SnapshotTarget: "tank/data/app"})
+	if res.Err == nil {
+		t.Fatal("expected error on Unhealthy")
+	}
+	if !res.RolledBack {
+		t.Error("expected RolledBack=true")
+	}
+	if len(snap.restored) != 1 {
+		t.Errorf("expected snapshot restored on rollback, got %d restores", len(snap.restored))
+	}
+	if len(snap.destroyed) != 0 {
+		t.Errorf("snapshot must NOT be destroyed during rollback; got %d", len(snap.destroyed))
+	}
+}
+
+func TestApplyWithOptions_NoSnapshotTargetSkipsSnapshotting(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "x:1"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+	snap := &fakeSnapshotBackend{}
+	u := &Updater{
+		Docker:         fd,
+		Snapshots:      snap,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "x:2", ApplyOptions{})
+	if res.Err != nil {
+		t.Fatal(res.Err)
+	}
+	if len(snap.snapshots) != 0 {
+		t.Errorf("no SnapshotTarget should mean no snapshot taken, got %d", len(snap.snapshots))
+	}
+	if res.SnapshotID != "" {
+		t.Errorf("SnapshotID should be empty, got %q", res.SnapshotID)
+	}
+}
+
+func TestApplyWithOptions_SnapshotFailureAbortsBeforeMutation(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "x:1"),
+		},
+	}
+	snap := &fakeSnapshotBackend{failOnSnapshot: true}
+	u := &Updater{
+		Docker:    fd,
+		Snapshots: snap,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "x:2",
+		ApplyOptions{SnapshotTarget: "tank/data/x"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "snapshot") {
+		t.Fatalf("expected snapshot error, got %v", res.Err)
+	}
+	if res.RolledBack {
+		t.Error("snapshot failure happens before mutations; RolledBack should be false")
+	}
+	// Should not have stopped, renamed, or recreated the container.
+	for _, op := range fd.ops {
+		if strings.HasPrefix(op, "stop:") || strings.HasPrefix(op, "rename:") || strings.HasPrefix(op, "create:") {
+			t.Errorf("post-snapshot-failure op leaked: %s\nall: %v", op, fd.ops)
+		}
+	}
+}
+
+func TestApplyWithOptions_RollbackContinuesEvenIfSnapshotRestoreFails(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus {
+		if i == 0 {
+			return docker.HealthNone
+		}
+		return docker.HealthUnhealthy
+	}
+	snap := &fakeSnapshotBackend{failOnRestore: true}
+	u := &Updater{
+		Docker:         fd,
+		Snapshots:      snap,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:2.0",
+		ApplyOptions{SnapshotTarget: "tank/data/app"})
+	if res.Err == nil {
+		t.Fatal("expected health-failure error")
+	}
+	if !res.RolledBack {
+		t.Error("expected RolledBack=true even when snapshot restore fails")
+	}
+	// The container-level rollback (rename old back, start old) should
+	// still have been attempted.
+	if !containsOp(fd.ops, "rename:old-id->app") {
+		t.Errorf("container-level rollback skipped after snapshot-restore failure\nops: %v", fd.ops)
+	}
+}
 
 func TestApply_RollbackOnUnhealthy(t *testing.T) {
 	fd := &fakeDocker{

@@ -199,8 +199,10 @@ Flags:`)
 	var upd *updater.Updater
 	if *apply {
 		if dc, ok := dockerClient.(*docker.Client); ok {
+			snapBackend := buildSnapshotBackend(loaded, logger)
 			upd = &updater.Updater{
 				Docker:        dc,
+				Snapshots:     snapBackend,
 				Logger:        logger,
 				HealthTimeout: *healthTimeout,
 			}
