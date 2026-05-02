@@ -50,6 +50,30 @@ func (r RiskLevel) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.Quote(r.String())), nil
 }
 
+// UnmarshalJSON accepts both the string form (produced by MarshalJSON) and
+// the legacy numeric form. Unknown values become RiskUnknown rather than
+// erroring — persisted data should never break loads.
+func (r *RiskLevel) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*r = RiskUnknown
+		return nil
+	}
+	if b[0] == '"' {
+		s, err := strconv.Unquote(string(b))
+		if err != nil {
+			return err
+		}
+		*r = ParseRiskLevel(s)
+		return nil
+	}
+	n, err := strconv.Atoi(string(b))
+	if err != nil {
+		return err
+	}
+	*r = RiskLevel(n)
+	return nil
+}
+
 // ChangeKind classifies what kind of version change a pending update represents.
 // This is independent of RiskLevel — policy maps ChangeKind to RiskLevel.
 type ChangeKind int
@@ -94,6 +118,52 @@ func (c ChangeKind) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.Quote(c.String())), nil
 }
 
+// UnmarshalJSON accepts the string form produced by MarshalJSON, and the
+// numeric form for legacy data.
+func (c *ChangeKind) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*c = ChangeUnknown
+		return nil
+	}
+	if b[0] == '"' {
+		s, err := strconv.Unquote(string(b))
+		if err != nil {
+			return err
+		}
+		*c = parseChangeKind(s)
+		return nil
+	}
+	n, err := strconv.Atoi(string(b))
+	if err != nil {
+		return err
+	}
+	*c = ChangeKind(n)
+	return nil
+}
+
+func parseChangeKind(s string) ChangeKind {
+	switch s {
+	case "digest":
+		return ChangeDigest
+	case "patch":
+		return ChangePatch
+	case "minor":
+		return ChangeMinor
+	case "major":
+		return ChangeMajor
+	case "prerelease":
+		return ChangePrerelease
+	case "lsio-rebuild":
+		return ChangeLSIORebuild
+	case "latest":
+		return ChangeLatest
+	case "none":
+		return ChangeNone
+	default:
+		return ChangeUnknown
+	}
+}
+
 // Confidence describes how reliable a risk assessment is, given the evidence available.
 type Confidence int
 
@@ -120,6 +190,37 @@ func (c Confidence) String() string {
 // MarshalJSON renders Confidence as its lowercase string form.
 func (c Confidence) MarshalJSON() ([]byte, error) {
 	return []byte(strconv.Quote(c.String())), nil
+}
+
+// UnmarshalJSON accepts the string form produced by MarshalJSON.
+func (c *Confidence) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*c = ConfidenceUnknown
+		return nil
+	}
+	if b[0] == '"' {
+		s, err := strconv.Unquote(string(b))
+		if err != nil {
+			return err
+		}
+		switch s {
+		case "low":
+			*c = ConfidenceLow
+		case "medium":
+			*c = ConfidenceMedium
+		case "high":
+			*c = ConfidenceHigh
+		default:
+			*c = ConfidenceUnknown
+		}
+		return nil
+	}
+	n, err := strconv.Atoi(string(b))
+	if err != nil {
+		return err
+	}
+	*c = Confidence(n)
+	return nil
 }
 
 // ImageInfo describes a specific image revision: where it lives, which tag points

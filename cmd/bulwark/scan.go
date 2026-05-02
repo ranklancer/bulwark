@@ -20,16 +20,19 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
+	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
 // scanDeps lets tests substitute the network-touching components. Production
 // leaves all fields nil and cmdScan constructs real clients.
 type scanDeps struct {
-	Docker     scanner.DockerLister
-	Registry   scanner.DigestResolver
-	Notes      scanner.NotesFetcher
-	Notifiers  []notifier.Notifier // overrides FromConfig when non-nil
+	Docker    scanner.DockerLister
+	Registry  scanner.DigestResolver
+	Notes     scanner.NotesFetcher
+	Notifiers []notifier.Notifier // overrides FromConfig when non-nil
+	Store     *store.Store        // overrides --data-dir when non-nil
+	Now       func() time.Time    // for deterministic dedup tests; defaults to time.Now
 }
 
 // cmdScan implements `bulwark scan`. It enumerates the containers on the
@@ -62,6 +65,8 @@ Flags:`)
 	concurrency := fs.Int("concurrency", 4, "number of containers to inspect in parallel")
 	noColor := fs.Bool("no-color", false, "disable ANSI colour codes in text output")
 	notify := fs.Bool("notify", false, "after scanning, dispatch notifications to channels enabled in config")
+	dataDir := fs.String("data-dir", os.Getenv("BULWARK_DATA_DIR"), "directory for persistent state (notification dedup, scan history)")
+	dedupTTL := fs.Duration("dedup-ttl", 24*time.Hour, "minimum interval between repeat notifications for the same (container, digest) pair")
 	verbose := fs.Bool("v", false, "verbose progress logging on stderr")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -114,6 +119,21 @@ Flags:`)
 		notesFetcher = f
 	}
 
+	// --- Wire up the persistent store (optional) ----------------------------
+	now := time.Now
+	if deps.Now != nil {
+		now = deps.Now
+	}
+	st := deps.Store
+	if st == nil && *dataDir != "" {
+		opened, err := store.Open(*dataDir)
+		if err != nil {
+			return fmt.Errorf("scan: open store: %w", err)
+		}
+		st = opened
+		defer func() { _ = st.Close() }()
+	}
+
 	s := &scanner.Scanner{
 		Docker:      dockerClient,
 		Registry:    regClient,
@@ -123,13 +143,16 @@ Flags:`)
 		Concurrency: *concurrency,
 	}
 
-	logger.Info("starting scan", "all", *all, "concurrency", *concurrency)
+	startedAt := now()
+	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil)
 	results, err := s.Scan(context.Background(), *all)
 	if err != nil {
 		return err
 	}
+	finishedAt := now()
 
 	var dispatchResults []notifier.DispatchResult
+	var dedupSilenced int
 	if *notify {
 		notifiers := deps.Notifiers
 		if notifiers == nil {
@@ -144,11 +167,25 @@ Flags:`)
 		if len(notifiers) == 0 {
 			logger.Warn("--notify requested but no notification channels are configured")
 		} else {
-			events := notifier.EventsFromScan(results, time.Now().UTC())
+			allEvents := notifier.EventsFromScan(results, finishedAt.UTC())
+			events, silenced := filterByDedup(st, allEvents, finishedAt, *dedupTTL, logger)
+			dedupSilenced = silenced
 			d := notifier.NewDispatcher(notifiers, logger, 30*time.Second)
 			dispatchResults = d.Dispatch(context.Background(), events)
+			markSentEvents(st, events, dispatchResults, finishedAt, logger)
 		}
 	}
+
+	// Persist the scan record after notifications so the file reflects the
+	// dispatch outcome too. RecordScan tolerates a nil store.
+	if st != nil {
+		rec := buildScanRecord(results, dispatchResults, startedAt, finishedAt)
+		if _, err := st.RecordScan(rec); err != nil {
+			// History is non-critical — log but don't fail the scan.
+			logger.Warn("could not persist scan record", "err", err)
+		}
+	}
+	_ = dedupSilenced
 
 	if *jsonOut {
 		return writeScanJSON(stdout, results, dispatchResults)
@@ -156,11 +193,132 @@ Flags:`)
 	if err := writeScanText(stdout, results, !*noColor && isLikelyTTY(stdout)); err != nil {
 		return err
 	}
-	if len(dispatchResults) > 0 {
-		writeDispatchSummary(stdout, dispatchResults)
+	if len(dispatchResults) > 0 || dedupSilenced > 0 {
+		writeDispatchSummary(stdout, dispatchResults, dedupSilenced)
 	}
 	return nil
 }
+
+// filterByDedup removes events the store says we've already notified about
+// (within the TTL). It returns the kept events and the count of silenced ones.
+// A nil store is the no-op (dedup disabled).
+func filterByDedup(st *store.Store, events []notifier.Event, now time.Time, ttl time.Duration, logger *slog.Logger) ([]notifier.Event, int) {
+	if st == nil || ttl <= 0 {
+		return events, 0
+	}
+	kept := make([]notifier.Event, 0, len(events))
+	silenced := 0
+	for _, e := range events {
+		key := dedupKey(e)
+		ok, err := st.ShouldNotify(key, e.Risk, now, ttl)
+		if err != nil {
+			// Fail open — better to over-notify than to suppress on a store
+			// failure. Log and proceed.
+			logger.Warn("dedup lookup failed; sending event anyway", "container", e.Container, "err", err)
+			kept = append(kept, e)
+			continue
+		}
+		if !ok {
+			silenced++
+			continue
+		}
+		kept = append(kept, e)
+	}
+	return kept, silenced
+}
+
+// markSentEvents records each event whose channel dispatched successfully.
+// We deliberately treat "all channels failed" as "not delivered" — better to
+// re-notify next scan than to silently swallow a failed alert.
+func markSentEvents(st *store.Store, events []notifier.Event, results []notifier.DispatchResult, when time.Time, logger *slog.Logger) {
+	if st == nil || len(events) == 0 {
+		return
+	}
+	anyOK := false
+	for _, r := range results {
+		if r.Ok() && r.Sent > 0 {
+			anyOK = true
+			break
+		}
+	}
+	if !anyOK {
+		return
+	}
+	for _, e := range events {
+		key := dedupKey(e)
+		meta := store.NotificationRecord{
+			ContainerName: e.Container,
+			Image:         e.Image,
+			Level:         e.Risk,
+		}
+		if err := st.MarkNotified(key, meta, when); err != nil {
+			logger.Warn("could not mark notification as sent", "container", e.Container, "err", err)
+		}
+	}
+}
+
+func dedupKey(e notifier.Event) store.NotificationKey {
+	// Container name is the most stable identifier we have post-recreate
+	// (the Docker container ID changes whenever the user runs `docker compose
+	// up` and the new image gets a fresh ID). For the dedup key we want the
+	// same identity across recreates so a single update only fires once.
+	return store.NotificationKey{
+		ContainerID:    e.Container,
+		RegistryDigest: e.RegistryDigest,
+	}
+}
+
+// buildScanRecord materializes a store.ScanRecord from the in-memory results
+// and dispatch outcomes. Stays in sync with writeScanJSON's per-result fields.
+func buildScanRecord(results []scanner.Result, dispatch []notifier.DispatchResult, started, finished time.Time) store.ScanRecord {
+	rec := store.ScanRecord{StartedAt: started, FinishedAt: finished}
+	host, _ := os.Hostname()
+	rec.Host = host
+	rec.Summary.Total = len(results)
+	rec.Results = make([]store.ScanResultRecord, 0, len(results))
+	for _, r := range results {
+		rr := store.ScanResultRecord{
+			ContainerID:     r.Container.ID,
+			ContainerName:   r.Container.Name,
+			Image:           r.Container.Image,
+			ComposeProject:  r.Container.ComposeProject(),
+			Skipped:         r.Skipped,
+			SkipReason:      r.SkipReason,
+			UpdateAvailable: r.HasUpdate(),
+			LocalDigest:     r.LocalDigest,
+			RegistryDigest:  r.RegistryDigest,
+			NotesSource:     r.NotesSource,
+		}
+		if r.Err != nil {
+			rr.Error = r.Err.Error()
+			rec.Summary.Errored++
+		} else if r.Skipped {
+			rec.Summary.Skipped++
+		} else if r.Assessment != nil {
+			rr.Level = r.Assessment.Level
+			rr.Kind = r.Assessment.Delta.Kind
+			rr.Confidence = r.Assessment.Confidence
+			rr.From = r.Assessment.Delta.From
+			rr.To = r.Assessment.Delta.To
+			rr.Rationale = r.Assessment.Rationale
+			rr.ReleaseURL = r.Assessment.ReleaseURL
+			if rr.UpdateAvailable {
+				rec.Summary.Pending++
+				switch r.Assessment.Level {
+				case types.RiskBreaking:
+					rec.Summary.Breaking++
+				case types.RiskReview:
+					rec.Summary.Review++
+				case types.RiskSafe:
+					rec.Summary.Safe++
+				}
+			}
+		}
+		rec.Results = append(rec.Results, rr)
+	}
+	return rec
+}
+
 
 // jsonResult is the wire shape of a scan result; mirrors scanner.Result but
 // uses string-typed fields for type-safe JSON consumers.
@@ -244,7 +402,7 @@ func writeScanJSON(w io.Writer, results []scanner.Result, dispatch []notifier.Di
 	return enc.Encode(envelope)
 }
 
-func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult) {
+func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult, dedupSilenced int) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Notifications:")
 	for _, r := range results {
@@ -256,6 +414,9 @@ func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult) {
 		default:
 			fmt.Fprintf(w, "  %s: sent %d (%d filtered)\n", r.Notifier, r.Sent, r.Skipped)
 		}
+	}
+	if dedupSilenced > 0 {
+		fmt.Fprintf(w, "  (%d event(s) silenced by dedup; use --dedup-ttl=0 to disable)\n", dedupSilenced)
 	}
 }
 

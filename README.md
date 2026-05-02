@@ -13,10 +13,10 @@ substantially further: every update is _understood_ before it is applied.
 
 > **Status:** early development. The risk classifier, configuration loader,
 > OCI registry client, GitHub release-notes fetcher, Docker socket client,
-> one-shot scanner, and notification dispatcher (Slack / Discord / generic
-> JSON webhooks) are implemented and tested. The continuously-running daemon,
-> snapshot backends, and web UI arrive in subsequent phases. See
-> [the roadmap](#roadmap) for the plan.
+> one-shot scanner, notification dispatcher (Slack / Discord / generic JSON
+> webhooks), persistent state (notification dedup with TTL, scan history),
+> and the `history` CLI are implemented and tested. The continuously-running
+> daemon, snapshot backends, and web UI arrive in subsequent phases.
 
 ---
 
@@ -65,7 +65,14 @@ bulwark scan
 bulwark scan --json | jq '.results[] | select(.update_available)'
 
 # Same scan, plus dispatch notifications to every channel enabled in config.
-bulwark scan --notify --config ./bulwark.yaml
+# --data-dir enables persistent dedup so cron re-runs don't spam.
+bulwark scan --notify --config ./bulwark.yaml --data-dir ./data
+
+# Inspect prior scans and the notification dedup state.
+bulwark history list --data-dir ./data
+bulwark history show latest --data-dir ./data
+bulwark history clear --data-dir ./data    # force re-notify on next scan
+bulwark history prune --keep 30 --data-dir ./data
 
 # Send a synthetic event to every configured channel — useful for verifying
 # webhook URLs and per-channel formatting without waiting for a real update.
@@ -162,7 +169,8 @@ The same scan runs in CI.
 | 2a    | OCI registry client + GitHub release-notes + `check`     | shipped  |
 | 2b    | Docker socket client, container scanner, `scan` command  | shipped  |
 | 2c    | Notifier dispatcher (Slack/Discord/generic), `--notify`  | shipped  |
-| 2d    | SQLite store, approval queue, DIUN webhook receiver      | next     |
+| 2d    | Persistent state (dedup + history), `bulwark history`    | shipped  |
+| 2e    | Approval queue, DIUN webhook receiver                    | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |

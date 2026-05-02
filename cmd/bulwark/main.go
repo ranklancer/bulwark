@@ -11,6 +11,8 @@
 //	                             digest movements, and report pending updates
 //	bulwark notify-test          send a synthetic event to every configured channel,
 //	                             reporting per-channel success
+//	bulwark history              inspect and manage persistent state — scan history,
+//	                             notification dedup memory, retention pruning
 //
 // The "run" daemon (continuous scheduling, approval queue, snapshot orchestration)
 // is wired in a subsequent phase.
@@ -74,6 +76,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdScan(args[1:], stdout, stderr)
 	case "notify-test":
 		return cmdNotifyTest(args[1:], stdout, stderr)
+	case "history":
+		return cmdHistory(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -94,6 +98,7 @@ Commands:
   check               Resolve registry digests, fetch release notes, and classify
   scan                Scan local Docker containers for pending updates
   notify-test         Send a synthetic event to every configured notifier
+  history             Inspect and manage persistent scan history & dedup state
 
 Run "bulwark <command> --help" for command-specific options.`)
 }
