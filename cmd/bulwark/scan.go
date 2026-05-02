@@ -16,6 +16,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/config"
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
@@ -25,9 +26,10 @@ import (
 // scanDeps lets tests substitute the network-touching components. Production
 // leaves all fields nil and cmdScan constructs real clients.
 type scanDeps struct {
-	Docker   scanner.DockerLister
-	Registry scanner.DigestResolver
-	Notes    scanner.NotesFetcher
+	Docker     scanner.DockerLister
+	Registry   scanner.DigestResolver
+	Notes      scanner.NotesFetcher
+	Notifiers  []notifier.Notifier // overrides FromConfig when non-nil
 }
 
 // cmdScan implements `bulwark scan`. It enumerates the containers on the
@@ -59,6 +61,7 @@ Flags:`)
 	githubToken := fs.String("github-token", os.Getenv("BULWARK_GITHUB_TOKEN"), "GitHub PAT for higher rate limits")
 	concurrency := fs.Int("concurrency", 4, "number of containers to inspect in parallel")
 	noColor := fs.Bool("no-color", false, "disable ANSI colour codes in text output")
+	notify := fs.Bool("notify", false, "after scanning, dispatch notifications to channels enabled in config")
 	verbose := fs.Bool("v", false, "verbose progress logging on stderr")
 	if err := fs.Parse(args); err != nil {
 		return errUsage
@@ -126,10 +129,37 @@ Flags:`)
 		return err
 	}
 
-	if *jsonOut {
-		return writeScanJSON(stdout, results)
+	var dispatchResults []notifier.DispatchResult
+	if *notify {
+		notifiers := deps.Notifiers
+		if notifiers == nil {
+			built, err := notifier.FromConfig(loaded)
+			if err != nil {
+				// Per FromConfig's contract, partial successes are returned
+				// alongside the error — log and proceed with what we got.
+				logger.Warn("some notification channels failed to construct", "err", err)
+			}
+			notifiers = built
+		}
+		if len(notifiers) == 0 {
+			logger.Warn("--notify requested but no notification channels are configured")
+		} else {
+			events := notifier.EventsFromScan(results, time.Now().UTC())
+			d := notifier.NewDispatcher(notifiers, logger, 30*time.Second)
+			dispatchResults = d.Dispatch(context.Background(), events)
+		}
 	}
-	return writeScanText(stdout, results, !*noColor && isLikelyTTY(stdout))
+
+	if *jsonOut {
+		return writeScanJSON(stdout, results, dispatchResults)
+	}
+	if err := writeScanText(stdout, results, !*noColor && isLikelyTTY(stdout)); err != nil {
+		return err
+	}
+	if len(dispatchResults) > 0 {
+		writeDispatchSummary(stdout, dispatchResults)
+	}
+	return nil
 }
 
 // jsonResult is the wire shape of a scan result; mirrors scanner.Result but
@@ -155,7 +185,7 @@ type jsonResult struct {
 	Error           string `json:"error,omitempty"`
 }
 
-func writeScanJSON(w io.Writer, results []scanner.Result) error {
+func writeScanJSON(w io.Writer, results []scanner.Result, dispatch []notifier.DispatchResult) error {
 	out := make([]jsonResult, 0, len(results))
 	for _, r := range results {
 		jr := jsonResult{
@@ -184,9 +214,49 @@ func writeScanJSON(w io.Writer, results []scanner.Result) error {
 		}
 		out = append(out, jr)
 	}
+
+	if len(dispatch) == 0 {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(out)
+	}
+	// When notifications were dispatched, wrap results + per-channel outcomes
+	// so machine consumers can act on both.
+	type dispatchJSON struct {
+		Notifier string `json:"notifier"`
+		Sent     int    `json:"sent"`
+		Skipped  int    `json:"skipped"`
+		Error    string `json:"error,omitempty"`
+	}
+	envelope := struct {
+		Results  []jsonResult   `json:"results"`
+		Notifies []dispatchJSON `json:"notifications"`
+	}{Results: out}
+	for _, d := range dispatch {
+		row := dispatchJSON{Notifier: d.Notifier, Sent: d.Sent, Skipped: d.Skipped}
+		if d.Err != nil {
+			row.Error = d.Err.Error()
+		}
+		envelope.Notifies = append(envelope.Notifies, row)
+	}
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(out)
+	return enc.Encode(envelope)
+}
+
+func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult) {
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Notifications:")
+	for _, r := range results {
+		switch {
+		case r.Err != nil:
+			fmt.Fprintf(w, "  %s: ERROR — %s\n", r.Notifier, r.Err.Error())
+		case r.Sent == 0:
+			fmt.Fprintf(w, "  %s: no events met threshold (%d filtered)\n", r.Notifier, r.Skipped)
+		default:
+			fmt.Fprintf(w, "  %s: sent %d (%d filtered)\n", r.Notifier, r.Sent, r.Skipped)
+		}
+	}
 }
 
 // writeScanText prints a human-friendly scan report. Each container occupies

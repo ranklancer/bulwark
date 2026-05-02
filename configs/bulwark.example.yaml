@@ -111,11 +111,29 @@ notifications:
   slack:
     enabled:     false
     webhook_url: "${BULWARK_SLACK_WEBHOOK}"
-    channel:     ""
+    channel:     ""               # optional override for legacy webhooks
+    min_level:   review           # safe | review | breaking
 
   discord:
     enabled:     false
     webhook_url: "${BULWARK_DISCORD_WEBHOOK}"
+    min_level:   review
+
+  # Arbitrary HTTP webhooks — useful for Home Assistant REST sensors, n8n
+  # workflow triggers, IFTTT-style services, or any tool that accepts JSON.
+  # The list is open-ended; add as many endpoints as you want.
+  generic:
+    - enabled:   false
+      name:      homeassistant
+      url:       "https://homeassistant.example.com/api/webhook/bulwark"
+      method:    POST
+      min_level: review
+      headers:
+        Authorization: "Bearer ${BULWARK_HASS_TOKEN}"
+    - enabled:   false
+      name:      n8n
+      url:       "https://n8n.example.com/webhook/bulwark"
+      min_level: breaking
 
   smtp:
     enabled:  false

@@ -9,6 +9,8 @@
 //	                             and classify the resulting update
 //	bulwark scan                 enumerate local containers, check the registry for
 //	                             digest movements, and report pending updates
+//	bulwark notify-test          send a synthetic event to every configured channel,
+//	                             reporting per-channel success
 //
 // The "run" daemon (continuous scheduling, approval queue, snapshot orchestration)
 // is wired in a subsequent phase.
@@ -70,6 +72,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdCheck(args[1:], stdout, stderr)
 	case "scan":
 		return cmdScan(args[1:], stdout, stderr)
+	case "notify-test":
+		return cmdNotifyTest(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -89,6 +93,7 @@ Commands:
   classify            Classify a hypothetical image update (offline, no network)
   check               Resolve registry digests, fetch release notes, and classify
   scan                Scan local Docker containers for pending updates
+  notify-test         Send a synthetic event to every configured notifier
 
 Run "bulwark <command> --help" for command-specific options.`)
 }

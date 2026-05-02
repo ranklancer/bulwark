@@ -13,9 +13,10 @@ substantially further: every update is _understood_ before it is applied.
 
 > **Status:** early development. The risk classifier, configuration loader,
 > OCI registry client, GitHub release-notes fetcher, Docker socket client,
-> and one-shot scanner are implemented and tested. The continuously-running
-> daemon, snapshot backends, notifier channels, and web UI are arriving in
-> subsequent phases. See [the roadmap](#roadmap) for the plan.
+> one-shot scanner, and notification dispatcher (Slack / Discord / generic
+> JSON webhooks) are implemented and tested. The continuously-running daemon,
+> snapshot backends, and web UI arrive in subsequent phases. See
+> [the roadmap](#roadmap) for the plan.
 
 ---
 
@@ -61,7 +62,14 @@ and per-container Docker labels.
 # Scan all containers managed by the local Docker daemon, look for digest
 # movement on each pinned tag, and report pending updates with risk levels.
 bulwark scan
-bulwark scan --json | jq '.[] | select(.update_available)'
+bulwark scan --json | jq '.results[] | select(.update_available)'
+
+# Same scan, plus dispatch notifications to every channel enabled in config.
+bulwark scan --notify --config ./bulwark.yaml
+
+# Send a synthetic event to every configured channel — useful for verifying
+# webhook URLs and per-channel formatting without waiting for a real update.
+bulwark notify-test --config ./bulwark.yaml
 
 # Live check for a specific update: resolve digests in the registry,
 # fetch GitHub release notes, classify the resulting update.
@@ -153,9 +161,10 @@ The same scan runs in CI.
 | 1     | Scaffolding, classifier, config, CLI                     | shipped  |
 | 2a    | OCI registry client + GitHub release-notes + `check`     | shipped  |
 | 2b    | Docker socket client, container scanner, `scan` command  | shipped  |
-| 2c    | SQLite store, approval queue, DIUN webhook receiver      | next     |
+| 2c    | Notifier dispatcher (Slack/Discord/generic), `--notify`  | shipped  |
+| 2d    | SQLite store, approval queue, DIUN webhook receiver      | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
-| 4     | Native Slack/Discord/HA/SMTP notifications               | planned  |
+| 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |
 | 6     | Hooks, scheduling, multi-arch images                     | planned  |
 

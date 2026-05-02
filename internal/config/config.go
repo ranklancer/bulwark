@@ -102,12 +102,25 @@ type HealthConfig struct {
 }
 
 type NotificationsConfig struct {
-	HomeAssistant HAConfig       `yaml:"homeassistant"`
-	Slack         SlackConfig    `yaml:"slack"`
-	Discord       DiscordConfig  `yaml:"discord"`
-	SMTP          SMTPConfig     `yaml:"smtp"`
-	Shoutrrr      ShoutrrrConfig `yaml:"shoutrrr"`
-	Digest        DigestConfig   `yaml:"digest"`
+	HomeAssistant HAConfig          `yaml:"homeassistant"`
+	Slack         SlackConfig       `yaml:"slack"`
+	Discord       DiscordConfig     `yaml:"discord"`
+	SMTP          SMTPConfig        `yaml:"smtp"`
+	Shoutrrr      ShoutrrrConfig    `yaml:"shoutrrr"`
+	Generic       []GenericConfig   `yaml:"generic"`
+	Digest        DigestConfig      `yaml:"digest"`
+}
+
+// GenericConfig configures a single arbitrary HTTP webhook channel. Multiple
+// channels are supported (each can have its own URL, headers, and threshold)
+// to cover the common case of "Home Assistant + n8n + an internal dashboard".
+type GenericConfig struct {
+	Enabled  bool              `yaml:"enabled"`
+	Name     string            `yaml:"name"`
+	URL      string            `yaml:"url"`
+	Method   string            `yaml:"method"`
+	Headers  map[string]string `yaml:"headers"`
+	MinLevel string            `yaml:"min_level"`
 }
 
 type HAConfig struct {
@@ -130,11 +143,13 @@ type SlackConfig struct {
 	Enabled    bool   `yaml:"enabled"`
 	WebhookURL string `yaml:"webhook_url"`
 	Channel    string `yaml:"channel"`
+	MinLevel   string `yaml:"min_level"`
 }
 
 type DiscordConfig struct {
 	Enabled    bool   `yaml:"enabled"`
 	WebhookURL string `yaml:"webhook_url"`
+	MinLevel   string `yaml:"min_level"`
 }
 
 type SMTPConfig struct {
