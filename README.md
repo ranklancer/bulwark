@@ -15,9 +15,10 @@ substantially further: every update is _understood_ before it is applied.
 > OCI registry client; GitHub release-notes fetcher; Docker socket client;
 > one-shot scanner; notification dispatcher (Slack / Discord / generic JSON
 > webhooks); persistent state (notification dedup with TTL, scan history);
-> long-running HTTP server with a DIUN-compatible webhook receiver. Up
-> next: the continuously-running scan daemon, update orchestration with
-> health-verified rollback, snapshot backends, and the web UI.
+> HTTP server with DIUN-compatible webhook receiver; continuously-running
+> daemon (`bulwark run`) that combines periodic scans with the HTTP server.
+> Up next: update orchestration with health-verified rollback, snapshot
+> backends, and the web UI.
 
 ---
 
@@ -79,12 +80,16 @@ bulwark history prune --keep 30 --data-dir ./data
 # webhook URLs and per-channel formatting without waiting for a real update.
 bulwark notify-test --config ./bulwark.yaml
 
-# Run the long-running HTTP server. Currently exposes a DIUN-compatible
-# webhook receiver so existing DIUN deployments can plug Bulwark in as the
-# "brain" without changing their notification setup.
+# Run the long-running HTTP server. Exposes a DIUN-compatible webhook
+# receiver so existing DIUN deployments can plug Bulwark in as the "brain"
+# without changing their notification setup.
 bulwark serve --config ./bulwark.yaml --data-dir ./data
 #   POST /api/v1/webhooks/diun    DIUN webhook receiver
 #   GET  /healthz, /readyz        liveness / readiness probes
+
+# Run the daemon — periodic scans + HTTP server in a single always-on
+# process. SIGINT or SIGTERM trigger a graceful shutdown.
+bulwark run --config ./bulwark.yaml --data-dir ./data --scan-interval 6h
 
 # Live check for a specific update: resolve digests in the registry,
 # fetch GitHub release notes, classify the resulting update.
@@ -179,7 +184,8 @@ The same scan runs in CI.
 | 2c    | Notifier dispatcher (Slack/Discord/generic), `--notify`  | shipped  |
 | 2d    | Persistent state (dedup + history), `bulwark history`    | shipped  |
 | 2e    | HTTP server, DIUN webhook receiver, `bulwark serve`      | shipped  |
-| 2f    | Continuously-running scan daemon, approval queue         | next     |
+| 2f    | Continuously-running daemon (`bulwark run`)              | shipped  |
+| 2g    | Approval queue, cron-aware scheduler, maintenance windows | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |

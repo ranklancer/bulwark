@@ -46,7 +46,8 @@ type DockerConfig struct {
 }
 
 type ScheduleConfig struct {
-	Check               string             `yaml:"check"`
+	Check               string              `yaml:"check"`
+	ScanInterval        string              `yaml:"scan_interval"`
 	MaintenanceWindows  []MaintenanceWindow `yaml:"maintenance_windows"`
 }
 

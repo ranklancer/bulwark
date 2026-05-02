@@ -13,7 +13,8 @@ docker:
 
 # When to scan for updates and when to actually apply them.
 schedule:
-  check: "0 */6 * * *"          # check every 6 hours
+  check: "0 */6 * * *"          # cron expression (used by the future cron-aware scheduler)
+  scan_interval: "6h"           # simple duration form, used by `bulwark run` today
   maintenance_windows:
     - start: "02:00"
       end:   "06:00"

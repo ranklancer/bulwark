@@ -16,9 +16,8 @@
 //	bulwark serve                run the long-running HTTP server. Currently exposes
 //	                             a DIUN-compatible webhook receiver so existing DIUN
 //	                             deployments can plug Bulwark in as the "brain"
-//
-// The "run" daemon (continuous scheduling, approval queue, snapshot orchestration)
-// is wired in a subsequent phase.
+//	bulwark run                  run the daemon — periodic scan loop combined with
+//	                             the HTTP server in a single always-on process
 package main
 
 import (
@@ -83,6 +82,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdHistory(args[1:], stdout, stderr)
 	case "serve":
 		return cmdServe(args[1:], stdout, stderr)
+	case "run":
+		return cmdRun(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -104,7 +105,8 @@ Commands:
   scan                Scan local Docker containers for pending updates
   notify-test         Send a synthetic event to every configured notifier
   history             Inspect and manage persistent scan history & dedup state
-  serve               Run the long-running HTTP server (DIUN webhook receiver)
+  serve               Run the HTTP server (DIUN webhook receiver) only
+  run                 Run the daemon: periodic scan loop + HTTP server
 
 Run "bulwark <command> --help" for command-specific options.`)
 }

@@ -134,7 +134,7 @@ Flags:`)
 		defer func() { _ = st.Close() }()
 	}
 
-	s := &scanner.Scanner{
+	scn := &scanner.Scanner{
 		Docker:      dockerClient,
 		Registry:    regClient,
 		Notes:       notesFetcher,
@@ -143,16 +143,7 @@ Flags:`)
 		Concurrency: *concurrency,
 	}
 
-	startedAt := now()
-	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil)
-	results, err := s.Scan(context.Background(), *all)
-	if err != nil {
-		return err
-	}
-	finishedAt := now()
-
-	var dispatchResults []notifier.DispatchResult
-	var dedupSilenced int
+	var dispatcher *notifier.Dispatcher
 	if *notify {
 		notifiers := deps.Notifiers
 		if notifiers == nil {
@@ -167,25 +158,26 @@ Flags:`)
 		if len(notifiers) == 0 {
 			logger.Warn("--notify requested but no notification channels are configured")
 		} else {
-			allEvents := notifier.EventsFromScan(results, finishedAt.UTC())
-			events, silenced := filterByDedup(st, allEvents, finishedAt, *dedupTTL, logger)
-			dedupSilenced = silenced
-			d := notifier.NewDispatcher(notifiers, logger, 30*time.Second)
-			dispatchResults = d.Dispatch(context.Background(), events)
-			markSentEvents(st, events, dispatchResults, finishedAt, logger)
+			dispatcher = notifier.NewDispatcher(notifiers, logger, 30*time.Second)
 		}
 	}
 
-	// Persist the scan record after notifications so the file reflects the
-	// dispatch outcome too. RecordScan tolerates a nil store.
-	if st != nil {
-		rec := buildScanRecord(results, dispatchResults, startedAt, finishedAt)
-		if _, err := st.RecordScan(rec); err != nil {
-			// History is non-critical — log but don't fail the scan.
-			logger.Warn("could not persist scan record", "err", err)
-		}
+	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil)
+	cycle, err := runScanCycle(context.Background(), scanCycleConfig{
+		Scanner:    scn,
+		Dispatcher: dispatcher,
+		Store:      st,
+		DedupTTL:   *dedupTTL,
+		Now:        now,
+		Logger:     logger,
+		All:        *all,
+	})
+	if err != nil {
+		return err
 	}
-	_ = dedupSilenced
+	results := cycle.Results
+	dispatchResults := cycle.Dispatch
+	dedupSilenced := cycle.DedupSilenced
 
 	if *jsonOut {
 		return writeScanJSON(stdout, results, dispatchResults)
