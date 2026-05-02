@@ -195,7 +195,8 @@ The same scan runs in CI.
 | 2e    | HTTP server, DIUN webhook receiver, `bulwark serve`      | shipped  |
 | 2f    | Continuously-running daemon (`bulwark run`)              | shipped  |
 | 2g    | Approval queue (`bulwark queue` + cycle integration)     | shipped  |
-| 2h    | Cron-aware scheduler, maintenance windows                | next     |
+| 2h    | Cron-aware scheduling for `bulwark run`                  | shipped  |
+| 3     | Update orchestration (pull + recreate + health + rollback) | next   |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |

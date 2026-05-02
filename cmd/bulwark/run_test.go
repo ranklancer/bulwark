@@ -271,6 +271,26 @@ func TestRun_NoDockerDisablesScheduler(t *testing.T) {
 	}
 }
 
+func TestRun_RejectsInvalidCron(t *testing.T) {
+	addr := freePort(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	deps := runDeps{Ctx: ctx}
+	var stdout, stderr bytes.Buffer
+	err := cmdRunWith(
+		[]string{"--listen", addr, "--cron", "not a cron expr", "--no-docker"},
+		&stdout, &stderr,
+		deps,
+	)
+	if err == nil {
+		t.Fatal("expected error for invalid cron expression")
+	}
+	if !strings.Contains(err.Error(), "cron") {
+		t.Errorf("error should mention cron: %v", err)
+	}
+}
+
 func TestRun_RejectsUnknownArgs(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := cmdRun([]string{"unexpected"}, &stdout, &stderr); err == nil {

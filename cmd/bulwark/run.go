@@ -78,7 +78,8 @@ Flags:`)
 	dataDir := fs.String("data-dir", os.Getenv("BULWARK_DATA_DIR"), "directory for persistent state")
 	dockerHost := fs.String("docker-host", "", "Docker socket path (default /var/run/docker.sock)")
 	noDocker := fs.Bool("no-docker", false, "do not connect to Docker (cross-host DIUN deployments)")
-	scanInterval := fs.Duration("scan-interval", 6*time.Hour, "interval between scheduled scans (0 disables periodic scanning)")
+	scanInterval := fs.Duration("scan-interval", 6*time.Hour, "interval between scheduled scans (0 disables periodic scanning); ignored when --cron is set")
+	scanCron := fs.String("cron", "", `cron expression for the scan schedule (5 fields, e.g. "0 3 * * *"); takes precedence over --scan-interval`)
 	noInitialScan := fs.Bool("no-initial-scan", false, "skip the immediate scan at startup")
 	all := fs.Bool("all", false, "include stopped containers in scans")
 	skipNotes := fs.Bool("no-fetch-notes", false, "skip GitHub release-notes fetch during scans")
@@ -119,6 +120,9 @@ Flags:`)
 			} else {
 				logger.Warn("run: ignoring invalid schedule.scan_interval", "value", loaded.Schedule.ScanInterval, "err", err)
 			}
+		}
+		if !flagPassed(fs, "cron") && loaded.Schedule.Check != "" {
+			*scanCron = loaded.Schedule.Check
 		}
 	}
 
@@ -248,12 +252,25 @@ Flags:`)
 	}
 	defer stop()
 
+	var cronSchedule *scheduler.CronSchedule
+	if *scanCron != "" {
+		parsed, err := scheduler.ParseCron(*scanCron)
+		if err != nil {
+			return fmt.Errorf("run: invalid cron expression %q: %w", *scanCron, err)
+		}
+		cronSchedule = parsed
+	}
+
+	scheduleDescr := scanInterval.String()
+	if cronSchedule != nil {
+		scheduleDescr = "cron " + cronSchedule.String()
+	}
 	logger.Info("run: ready",
 		"listen", *listen,
 		"docker", dockerClient != nil,
 		"notifiers", len(notifiers),
 		"store", st != nil,
-		"scan_interval", scanInterval.String(),
+		"schedule", scheduleDescr,
 	)
 
 	// --- Run scheduler + HTTP server in parallel ------------------------
@@ -263,9 +280,10 @@ Flags:`)
 		schedulerErr error
 	)
 
-	if dockerClient != nil && *scanInterval > 0 {
+	if dockerClient != nil && (cronSchedule != nil || *scanInterval > 0) {
 		sch := &scheduler.Scheduler{
 			Interval:       *scanInterval,
+			Cron:           cronSchedule,
 			RunImmediately: !*noInitialScan,
 			Job:            scanJob,
 			Logger:         logger,

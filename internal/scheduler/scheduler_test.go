@@ -104,6 +104,62 @@ func TestScheduler_NilJobIsError(t *testing.T) {
 	}
 }
 
+func TestScheduler_CronTakesPrecedenceOverInterval(t *testing.T) {
+	// Cron set with a non-matching schedule (Feb 30 — never fires) plus a
+	// fast Interval that *would* fire if precedence were inverted.
+	cron, err := ParseCron("0 0 30 2 *")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int32
+	s := &Scheduler{
+		Interval:       5 * time.Millisecond,
+		Cron:           cron,
+		RunImmediately: false,
+		Job: func(_ context.Context) error {
+			atomic.AddInt32(&calls, 1)
+			return nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_ = s.Run(ctx)
+	// Cron never matches, so the job should not have run via the interval path.
+	if got := atomic.LoadInt32(&calls); got != 0 {
+		t.Errorf("calls = %d, want 0 (cron precedence over interval)", got)
+	}
+}
+
+func TestScheduler_CronFiresAtComputedTime(t *testing.T) {
+	cron, _ := ParseCron("* * * * *") // every minute
+	var calls int32
+	// Frozen-clock test: each Now() call returns a value far enough ahead
+	// that Cron.Next yields a tiny wait (next minute boundary).
+	start := time.Now().Truncate(time.Minute).Add(time.Minute - 50*time.Millisecond)
+	s := &Scheduler{
+		Cron:           cron,
+		RunImmediately: false,
+		Now:            func() time.Time { return start },
+		Job: func(_ context.Context) error {
+			atomic.AddInt32(&calls, 1)
+			return nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	_ = s.Run(ctx)
+	if got := atomic.LoadInt32(&calls); got < 1 {
+		t.Errorf("cron tick did not fire within window (calls=%d)", got)
+	}
+}
+
+func TestScheduler_NoScheduleIsNoop(t *testing.T) {
+	s := &Scheduler{Job: func(_ context.Context) error { return nil }}
+	if err := s.Run(context.Background()); err != nil {
+		t.Errorf("no-schedule run returned %v", err)
+	}
+}
+
 func TestScheduler_CanceledJobErrorNotEscalated(t *testing.T) {
 	var onError int32
 	s := &Scheduler{
