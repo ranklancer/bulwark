@@ -23,6 +23,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
 	"github.com/bulwark-docker/bulwark/internal/store"
+	"github.com/bulwark-docker/bulwark/internal/updater"
 )
 
 // runDeps lets tests substitute every networked component for `bulwark run`.
@@ -34,6 +35,7 @@ type runDeps struct {
 	Notes     scanner.NotesFetcher
 	Notifiers []notifier.Notifier
 	Store     *store.Store
+	Updater   *updater.Updater
 
 	// Ctx, when non-nil, replaces signal.NotifyContext as the parent context
 	// driving daemon shutdown. Tests cancel this to drive clean shutdown
@@ -81,6 +83,8 @@ Flags:`)
 	scanInterval := fs.Duration("scan-interval", 6*time.Hour, "interval between scheduled scans (0 disables periodic scanning); ignored when --cron is set")
 	scanCron := fs.String("cron", "", `cron expression for the scan schedule (5 fields, e.g. "0 3 * * *"); takes precedence over --scan-interval`)
 	noInitialScan := fs.Bool("no-initial-scan", false, "skip the immediate scan at startup")
+	apply := fs.Bool("apply", false, "auto-apply qualifying updates (SAFE always, plus REVIEW updates approved via `bulwark queue approve`); BREAKING never auto-applies")
+	healthTimeout := fs.Duration("health-timeout", 60*time.Second, "how long to wait for the recreated container to become healthy before rolling back")
 	all := fs.Bool("all", false, "include stopped containers in scans")
 	skipNotes := fs.Bool("no-fetch-notes", false, "skip GitHub release-notes fetch during scans")
 	githubToken := fs.String("github-token", os.Getenv("BULWARK_GITHUB_TOKEN"), "GitHub PAT for higher rate limits")
@@ -189,6 +193,24 @@ Flags:`)
 	// same shape; Go's structural typing lets us pass dockerClient directly
 	// to the scanner without an adapter — but only if it's non-nil. With
 	// --no-docker, dockerClient is nil and we skip scheduling.
+	// If --apply is set we need a concrete *docker.Client (write methods).
+	// Tests inject deps.Updater; production constructs one when dockerClient
+	// is the real *docker.Client we built earlier.
+	var upd *updater.Updater
+	if *apply {
+		if dc, ok := dockerClient.(*docker.Client); ok {
+			upd = &updater.Updater{
+				Docker:        dc,
+				Logger:        logger,
+				HealthTimeout: *healthTimeout,
+			}
+		} else if deps.Updater != nil {
+			upd = deps.Updater
+		} else {
+			return errors.New("run: --apply requires a real Docker client (or an injected updater for tests)")
+		}
+	}
+
 	scanJob := func(ctx context.Context) error {
 		if dockerClient == nil {
 			return nil
@@ -206,6 +228,8 @@ Flags:`)
 			Dispatcher: dispatcher,
 			Store:      st,
 			DedupTTL:   *dedupTTL,
+			Updater:    upd,
+			Apply:      *apply,
 			Now:        deps.Now,
 			Logger:     logger,
 			All:        *all,

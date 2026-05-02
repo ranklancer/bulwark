@@ -11,14 +11,16 @@ on failure.
 It is the spiritual successor to Watchtower (archived December 2025) and goes
 substantially further: every update is _understood_ before it is applied.
 
-> **Status:** early development. Shipped: risk classifier; YAML config;
-> OCI registry client; GitHub release-notes fetcher; Docker socket client;
+> **Status:** early development but functionally complete on the read +
+> notify + apply path. Shipped: risk classifier; YAML config; OCI registry
+> client; GitHub release-notes fetcher; Docker socket client (read + write);
 > one-shot scanner; notification dispatcher (Slack / Discord / generic JSON
 > webhooks); persistent state (notification dedup with TTL, scan history,
-> approval queue with approve/reject/forget); HTTP server with DIUN-
-> compatible webhook receiver; continuously-running daemon (`bulwark run`).
-> Up next: update orchestration with health-verified rollback, snapshot
-> backends, and the web UI.
+> approval queue); HTTP server with DIUN-compatible webhook receiver;
+> continuously-running daemon (`bulwark run`); cron-aware scheduling;
+> **update orchestration with health-verified container-level rollback**.
+> Up next: filesystem snapshot backends (ZFS / Btrfs / volume export) and
+> the web UI.
 
 ---
 
@@ -99,6 +101,12 @@ bulwark serve --config ./bulwark.yaml --data-dir ./data
 # Run the daemon — periodic scans + HTTP server in a single always-on
 # process. SIGINT or SIGTERM trigger a graceful shutdown.
 bulwark run --config ./bulwark.yaml --data-dir ./data --scan-interval 6h
+
+# Same daemon, plus auto-apply qualifying updates: SAFE always, REVIEW
+# updates that have been approved via `bulwark queue approve`. BREAKING
+# never auto-applies. Health verification + container-level rollback
+# protect against bad pulls.
+bulwark run --config ./bulwark.yaml --data-dir ./data --apply --cron "0 3 * * *"
 
 # Live check for a specific update: resolve digests in the registry,
 # fetch GitHub release notes, classify the resulting update.
@@ -196,7 +204,8 @@ The same scan runs in CI.
 | 2f    | Continuously-running daemon (`bulwark run`)              | shipped  |
 | 2g    | Approval queue (`bulwark queue` + cycle integration)     | shipped  |
 | 2h    | Cron-aware scheduling for `bulwark run`                  | shipped  |
-| 3     | Update orchestration (pull + recreate + health + rollback) | next   |
+| 3     | Update orchestration: pull + recreate + health + rollback | shipped |
+| 4     | Snapshot backends (ZFS, Btrfs, volume export)            | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |

@@ -8,6 +8,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/store"
+	"github.com/bulwark-docker/bulwark/internal/updater"
 )
 
 // scanCycleConfig bundles the shared inputs for one full scan + dispatch +
@@ -18,6 +19,8 @@ type scanCycleConfig struct {
 	Dispatcher *notifier.Dispatcher // nil disables notification dispatch
 	Store      *store.Store         // nil disables dedup + history
 	DedupTTL   time.Duration        // 0 disables dedup silencing
+	Updater    *updater.Updater     // nil disables auto-apply
+	Apply      bool                 // true to enable auto-apply; requires Updater
 	Now        func() time.Time     // injected for deterministic tests
 	Logger     *slog.Logger
 	All        bool // include stopped containers
@@ -29,8 +32,9 @@ type scanCycleConfig struct {
 type scanCycleResult struct {
 	Results          []scanner.Result
 	Dispatch         []notifier.DispatchResult
-	DedupSilenced    int // events suppressed by TTL silencing
-	ApprovalSilenced int // events suppressed by an existing user decision
+	DedupSilenced    int                    // events suppressed by TTL silencing
+	ApprovalSilenced int                    // events suppressed by an existing user decision
+	Applies          map[string]applyOutcome // keyed by container name
 	StartedAt        time.Time
 	FinishedAt       time.Time
 }
@@ -60,8 +64,18 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 	res.Results = results
 	res.FinishedAt = now()
 
+	// Auto-apply qualifying updates BEFORE notifications. This lets us
+	// surface "Auto-updated" / "ROLLBACK" notifications instead of
+	// double-notifying ("update available" then "applied").
+	if cfg.Apply && cfg.Updater != nil {
+		res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, logger)
+	}
+
 	if cfg.Dispatcher != nil && len(cfg.Dispatcher.Notifiers()) > 0 {
 		allEvents := notifier.EventsFromScan(results, res.FinishedAt.UTC())
+		if len(res.Applies) > 0 {
+			adjustEventActions(allEvents, res.Applies)
+		}
 
 		// Approval decisions take priority — they silence forever, not just
 		// within the TTL window. We filter them out first so subsequent steps

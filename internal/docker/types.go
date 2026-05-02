@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 )
@@ -35,6 +36,56 @@ type ImageInspect struct {
 	ID          string
 	RepoTags    []string
 	RepoDigests []string
+}
+
+// HealthStatus is the parsed value of /containers/<id>/json's State.Health.Status.
+// Docker uses one of: "starting", "healthy", "unhealthy". Containers without a
+// HEALTHCHECK have no Health field and yield HealthNone.
+type HealthStatus int
+
+const (
+	HealthNone HealthStatus = iota
+	HealthStarting
+	HealthHealthy
+	HealthUnhealthy
+)
+
+func (h HealthStatus) String() string {
+	switch h {
+	case HealthStarting:
+		return "starting"
+	case HealthHealthy:
+		return "healthy"
+	case HealthUnhealthy:
+		return "unhealthy"
+	default:
+		return "none"
+	}
+}
+
+// ContainerInspect is the subset of /containers/<id>/json needed to drive
+// recreate-with-rollback. Config + HostConfig + NetworkSettings are kept as
+// json.RawMessage pass-throughs; we don't introspect them but pass them
+// back into POST /containers/create when recreating with a new image.
+type ContainerInspect struct {
+	ID              string
+	Name            string // includes the leading slash exactly as Docker returns it
+	Image           string // e.g. "sha256:abc..."
+	ImageRef        string // the human-readable ref (e.g. "lscr.io/.../sonarr:4.0.10")
+	Running         bool
+	Health          HealthStatus
+	Config          json.RawMessage // Cmd, Env, Labels, ExposedPorts, Image, etc.
+	HostConfig      json.RawMessage // Binds, RestartPolicy, NetworkMode, etc.
+	NetworkSettings json.RawMessage // Networks (used to rebuild NetworkingConfig.EndpointsConfig)
+}
+
+// NameWithoutSlash returns Name with the leading "/" stripped, matching
+// Container.Name semantics.
+func (c *ContainerInspect) NameWithoutSlash() string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimPrefix(c.Name, "/")
 }
 
 // DigestFor returns the registry-side digest from RepoDigests for the given

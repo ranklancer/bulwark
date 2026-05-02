@@ -21,6 +21,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/store"
+	"github.com/bulwark-docker/bulwark/internal/updater"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
@@ -32,6 +33,7 @@ type scanDeps struct {
 	Notes     scanner.NotesFetcher
 	Notifiers []notifier.Notifier // overrides FromConfig when non-nil
 	Store     *store.Store        // overrides --data-dir when non-nil
+	Updater   *updater.Updater    // overrides Updater construction when --apply is set
 	Now       func() time.Time    // for deterministic dedup tests; defaults to time.Now
 }
 
@@ -65,6 +67,8 @@ Flags:`)
 	concurrency := fs.Int("concurrency", 4, "number of containers to inspect in parallel")
 	noColor := fs.Bool("no-color", false, "disable ANSI colour codes in text output")
 	notify := fs.Bool("notify", false, "after scanning, dispatch notifications to channels enabled in config")
+	apply := fs.Bool("apply", false, "auto-apply qualifying updates: SAFE always, plus REVIEW updates that have been approved via `bulwark queue approve`. BREAKING never auto-applies.")
+	healthTimeout := fs.Duration("health-timeout", 60*time.Second, "how long to wait for the recreated container to become healthy before rolling back")
 	dataDir := fs.String("data-dir", os.Getenv("BULWARK_DATA_DIR"), "directory for persistent state (notification dedup, scan history)")
 	dedupTTL := fs.Duration("dedup-ttl", 24*time.Hour, "minimum interval between repeat notifications for the same (container, digest) pair")
 	verbose := fs.Bool("v", false, "verbose progress logging on stderr")
@@ -162,12 +166,33 @@ Flags:`)
 		}
 	}
 
-	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil)
+	var upd *updater.Updater
+	if *apply {
+		// dockerClient is api.DockerInspector / scanner.DockerLister — for
+		// apply we also need the write methods, which only the concrete
+		// *docker.Client provides. Production paths construct a real client
+		// when --apply is set; tests inject one via deps.
+		if dc, ok := dockerClient.(*docker.Client); ok {
+			upd = &updater.Updater{
+				Docker:        dc,
+				Logger:        logger,
+				HealthTimeout: *healthTimeout,
+			}
+		} else if deps.Updater != nil {
+			upd = deps.Updater
+		} else {
+			return errors.New("scan: --apply requires a real Docker client; pass --docker-host or run inside a container with the socket mounted")
+		}
+	}
+
+	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil, "apply", *apply)
 	cycle, err := runScanCycle(context.Background(), scanCycleConfig{
 		Scanner:    scn,
 		Dispatcher: dispatcher,
 		Store:      st,
 		DedupTTL:   *dedupTTL,
+		Updater:    upd,
+		Apply:      *apply,
 		Now:        now,
 		Logger:     logger,
 		All:        *all,

@@ -1,0 +1,413 @@
+package updater
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/bulwark-docker/bulwark/internal/docker"
+)
+
+// fakeDocker is a programmable test double for the Docker client. Each
+// method records the calls it received and consults a dispatch table for
+// scripted responses.
+type fakeDocker struct {
+	pulls   []string
+	created []createRecord
+
+	// containers maps an ID or name to its inspect result. Lookups try
+	// both the literal key and the leading-slash form Docker uses for names.
+	containers map[string]*docker.ContainerInspect
+
+	// ops records every method invocation in order, so tests can assert
+	// the recreate dance ran in the right sequence.
+	ops []string
+
+	// failurePoints lets a test inject an error at a specific operation:
+	// e.g. {"start": errors.New("...")} fails the StartContainer call.
+	failurePoints map[string]error
+
+	// healthTimeline returns the next health status on each Inspect call,
+	// or nil to use the container's stored Health verbatim.
+	healthTimeline func(callIndex int) docker.HealthStatus
+
+	inspectCalls atomic.Int32
+}
+
+type createRecord struct {
+	Name  string
+	Image string
+}
+
+func (f *fakeDocker) PullImage(_ context.Context, ref string) error {
+	f.ops = append(f.ops, "pull:"+ref)
+	if err := f.failurePoints["pull"]; err != nil {
+		return err
+	}
+	f.pulls = append(f.pulls, ref)
+	return nil
+}
+
+func (f *fakeDocker) InspectContainer(_ context.Context, id string) (*docker.ContainerInspect, error) {
+	idx := int(f.inspectCalls.Add(1)) - 1
+	f.ops = append(f.ops, "inspect:"+id)
+	if err := f.failurePoints["inspect"]; err != nil {
+		return nil, err
+	}
+	c, ok := f.containers[id]
+	if !ok {
+		return nil, nil
+	}
+	if f.healthTimeline != nil {
+		// Clone so the timeline doesn't mutate stored state.
+		cp := *c
+		cp.Health = f.healthTimeline(idx)
+		return &cp, nil
+	}
+	return c, nil
+}
+
+func (f *fakeDocker) StopContainer(_ context.Context, id string, _ int) error {
+	f.ops = append(f.ops, "stop:"+id)
+	return f.failurePoints["stop"]
+}
+func (f *fakeDocker) StartContainer(_ context.Context, id string) error {
+	f.ops = append(f.ops, "start:"+id)
+	if err := f.failurePoints["start"]; err != nil {
+		return err
+	}
+	if c, ok := f.containers[id]; ok {
+		c.Running = true
+	}
+	return nil
+}
+func (f *fakeDocker) RemoveContainer(_ context.Context, id string, _ bool) error {
+	f.ops = append(f.ops, "remove:"+id)
+	return f.failurePoints["remove"]
+}
+func (f *fakeDocker) RenameContainer(_ context.Context, id, newName string) error {
+	f.ops = append(f.ops, "rename:"+id+"->"+newName)
+	if err := f.failurePoints["rename"]; err != nil {
+		return err
+	}
+	// Update the indexed entry so subsequent lookups by new name work.
+	if c, ok := f.containers[id]; ok {
+		c.Name = "/" + newName
+	}
+	return nil
+}
+func (f *fakeDocker) CreateContainer(_ context.Context, name string, _ docker.CreateContainerConfig) (string, error) {
+	f.ops = append(f.ops, "create:"+name)
+	if err := f.failurePoints["create"]; err != nil {
+		return "", err
+	}
+	newID := "new-" + name
+	f.containers[newID] = &docker.ContainerInspect{
+		ID:      newID,
+		Name:    "/" + name,
+		Running: false,
+		Health:  docker.HealthNone,
+		Config:  json.RawMessage(`{"Image":"new"}`),
+	}
+	f.created = append(f.created, createRecord{Name: name, Image: "new"})
+	return newID, nil
+}
+
+func sampleInspect(id, name, image string) *docker.ContainerInspect {
+	return &docker.ContainerInspect{
+		ID:              id,
+		Name:            "/" + name,
+		ImageRef:        image,
+		Running:         true,
+		Health:          docker.HealthNone,
+		Config:          json.RawMessage(`{"Image":"` + image + `","Env":["TZ=UTC"]}`),
+		HostConfig:      json.RawMessage(`{"Binds":["/data:/data"]}`),
+		NetworkSettings: json.RawMessage(`{"Networks":{"media":{}}}`),
+	}
+}
+
+// --- happy path -------------------------------------------------------------
+
+func TestApply_HappyPath_NoHealthcheck(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "lscr.io/linuxserver/sonarr:4.0.10-ls45"),
+		},
+	}
+	// After create, simulate the new container becoming Running through
+	// the grace period.
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	// After CreateContainer adds the entry, also flag it Running so the
+	// no-HEALTHCHECK path accepts it.
+	origCreate := fd.CreateContainer
+	_ = origCreate
+
+	res := u.Apply(context.Background(), "old-id", "lscr.io/linuxserver/sonarr:4.0.11-ls47")
+
+	if res.Err != nil {
+		t.Fatalf("Apply returned err: %v\nops: %v", res.Err, fd.ops)
+	}
+	if res.RolledBack {
+		t.Errorf("expected no rollback")
+	}
+
+	// Expected operation order:
+	//   pull → inspect old → stop old → rename old → create new → start new →
+	//   inspect new (health) ... → remove old
+	want := []string{
+		"pull:lscr.io/linuxserver/sonarr:4.0.11-ls47",
+		"inspect:old-id",
+		"stop:old-id",
+		"rename:old-id->sonarr-bulwark-old",
+		"create:sonarr",
+		"start:new-sonarr",
+	}
+	for i, w := range want {
+		if i >= len(fd.ops) || fd.ops[i] != w {
+			t.Errorf("op[%d] = %q, want %q\nall: %v", i, opsAt(fd.ops, i), w, fd.ops)
+		}
+	}
+	// remove of the preserved old container must come at the end.
+	last := fd.ops[len(fd.ops)-1]
+	if last != "remove:old-id" {
+		t.Errorf("last op = %q, want remove:old-id\nall: %v", last, fd.ops)
+	}
+}
+
+func TestApply_HappyPath_WithHealthcheck(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+	}
+	// Inspect calls during waitForHealthy (the new container is "new-app"):
+	//   1st inspect — starting
+	//   2nd inspect — healthy
+	// The first inspect call (idx 0) is for the old container during the
+	// pre-recreate phase, so we bump the timeline accordingly.
+	fd.healthTimeline = func(i int) docker.HealthStatus {
+		switch i {
+		case 0:
+			return docker.HealthNone // pre-recreate inspect
+		case 1:
+			return docker.HealthStarting
+		default:
+			return docker.HealthHealthy
+		}
+	}
+
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	if res.Err != nil {
+		t.Fatalf("Apply: %v\nops: %v", res.Err, fd.ops)
+	}
+	if res.HealthStatus != docker.HealthHealthy {
+		t.Errorf("HealthStatus = %v, want healthy", res.HealthStatus)
+	}
+}
+
+// --- rollback paths ---------------------------------------------------------
+
+func TestApply_RollbackOnUnhealthy(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus {
+		if i == 0 {
+			return docker.HealthNone
+		}
+		return docker.HealthUnhealthy
+	}
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	if res.Err == nil {
+		t.Fatal("expected error when health is Unhealthy")
+	}
+	if !res.RolledBack {
+		t.Error("expected RolledBack=true")
+	}
+
+	// Rollback must:
+	//   stop the new, remove the new, rename old back, start old.
+	joined := strings.Join(fd.ops, "|")
+	for _, want := range []string{
+		"stop:new-app",
+		"remove:new-app",
+		"rename:old-id->app",
+		"start:old-id",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("rollback ops missing %q\nall: %s", want, joined)
+		}
+	}
+}
+
+func TestApply_RollbackOnStartFailure(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+		failurePoints: map[string]error{"start": errors.New("oom")},
+	}
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	// First start (the new container) fails; second start (the old one,
+	// during rollback) is also configured to fail because failurePoints is
+	// shared. That's fine — the test asserts the rollback sequence is
+	// attempted, not that it succeeded.
+	if res.Err == nil {
+		t.Fatal("expected error when start fails")
+	}
+	if !res.RolledBack {
+		t.Error("expected RolledBack=true")
+	}
+	// The rename-back attempt must be present.
+	if !containsOp(fd.ops, "rename:old-id->app") {
+		t.Errorf("rollback rename missing\nops: %v", fd.ops)
+	}
+}
+
+func TestApply_PullFailure_AbortsBeforeAnyMutation(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+		failurePoints: map[string]error{"pull": errors.New("manifest unknown")},
+	}
+	u := &Updater{Docker: fd}
+	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:9.9.9")
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "manifest unknown") {
+		t.Fatalf("expected pull error, got %v", res.Err)
+	}
+	if res.RolledBack {
+		t.Error("RolledBack should be false: nothing was changed yet")
+	}
+	// Only the pull should have been attempted.
+	if len(fd.ops) != 1 || !strings.HasPrefix(fd.ops[0], "pull:") {
+		t.Errorf("expected only pull attempt, got %v", fd.ops)
+	}
+}
+
+func TestApply_RenameFailure_TriesToStartOldBackUp(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "app", "ghcr.io/owner/app:1.0"),
+		},
+		failurePoints: map[string]error{"rename": errors.New("name conflict")},
+	}
+	u := &Updater{Docker: fd}
+	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "rename old") {
+		t.Fatalf("expected rename error, got %v", res.Err)
+	}
+	// A start of old-id must follow the failed rename so we don't leave
+	// the user's container stopped.
+	if !containsOp(fd.ops, "start:old-id") {
+		t.Errorf("expected start:old-id after rename failure, got %v", fd.ops)
+	}
+}
+
+func TestApply_InspectMissingContainerErrors(t *testing.T) {
+	fd := &fakeDocker{containers: map[string]*docker.ContainerInspect{}}
+	u := &Updater{Docker: fd}
+	res := u.Apply(context.Background(), "absent", "x:1")
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "not found") {
+		t.Errorf("expected not-found error, got %v", res.Err)
+	}
+}
+
+// --- waitForHealthy in isolation -------------------------------------------
+
+func TestWaitForHealthy_TimesOutWhenStuckStarting(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"x": {ID: "x", Health: docker.HealthStarting, Running: true},
+		},
+		healthTimeline: func(_ int) docker.HealthStatus { return docker.HealthStarting },
+	}
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  20 * time.Millisecond,
+	}
+	healthy, status, err := u.waitForHealthy(context.Background(), "x")
+	if healthy {
+		t.Error("should not be healthy")
+	}
+	if status != docker.HealthStarting {
+		t.Errorf("status = %v, want Starting", status)
+	}
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Errorf("err = %v, want timeout", err)
+	}
+}
+
+func TestWaitForHealthy_RespectsContextCancel(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"x": {ID: "x", Health: docker.HealthStarting, Running: true},
+		},
+		healthTimeline: func(_ int) docker.HealthStatus { return docker.HealthStarting },
+	}
+	u := &Updater{
+		Docker:         fd,
+		HealthInterval: 50 * time.Millisecond,
+		HealthTimeout:  10 * time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_, _, err := u.waitForHealthy(ctx, "x")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled", err)
+	}
+}
+
+// --- helpers ---------------------------------------------------------------
+
+func opsAt(ops []string, i int) string {
+	if i < len(ops) {
+		return ops[i]
+	}
+	return "<missing>"
+}
+
+func containsOp(ops []string, want string) bool {
+	for _, op := range ops {
+		if op == want {
+			return true
+		}
+	}
+	return false
+}
