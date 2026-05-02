@@ -27,11 +27,12 @@ type scanCycleConfig struct {
 // expose it as a struct (not just (results, dispatch) tuples) so the daemon
 // loop can also surface a digest in its periodic log lines.
 type scanCycleResult struct {
-	Results        []scanner.Result
-	Dispatch       []notifier.DispatchResult
-	DedupSilenced  int
-	StartedAt      time.Time
-	FinishedAt     time.Time
+	Results          []scanner.Result
+	Dispatch         []notifier.DispatchResult
+	DedupSilenced    int // events suppressed by TTL silencing
+	ApprovalSilenced int // events suppressed by an existing user decision
+	StartedAt        time.Time
+	FinishedAt       time.Time
 }
 
 // runScanCycle executes one full pipeline iteration: scan → events → dedup
@@ -61,11 +62,19 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 
 	if cfg.Dispatcher != nil && len(cfg.Dispatcher.Notifiers()) > 0 {
 		allEvents := notifier.EventsFromScan(results, res.FinishedAt.UTC())
-		events, silenced := filterByDedup(cfg.Store, allEvents, res.FinishedAt, cfg.DedupTTL, logger)
-		res.DedupSilenced = silenced
-		if len(events) > 0 {
-			res.Dispatch = cfg.Dispatcher.Dispatch(ctx, events)
-			markSentEvents(cfg.Store, events, res.Dispatch, res.FinishedAt, logger)
+
+		// Approval decisions take priority — they silence forever, not just
+		// within the TTL window. We filter them out first so subsequent steps
+		// only see still-pending events.
+		afterApproval, approvalSilenced := filterByApproval(cfg.Store, allEvents, logger)
+		res.ApprovalSilenced = approvalSilenced
+
+		afterDedup, dedupSilenced := filterByDedup(cfg.Store, afterApproval, res.FinishedAt, cfg.DedupTTL, logger)
+		res.DedupSilenced = dedupSilenced
+
+		if len(afterDedup) > 0 {
+			res.Dispatch = cfg.Dispatcher.Dispatch(ctx, afterDedup)
+			markSentEvents(cfg.Store, afterDedup, res.Dispatch, res.FinishedAt, logger)
 		}
 	}
 

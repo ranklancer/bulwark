@@ -178,6 +178,7 @@ Flags:`)
 	results := cycle.Results
 	dispatchResults := cycle.Dispatch
 	dedupSilenced := cycle.DedupSilenced
+	approvalSilenced := cycle.ApprovalSilenced
 
 	if *jsonOut {
 		return writeScanJSON(stdout, results, dispatchResults)
@@ -185,8 +186,8 @@ Flags:`)
 	if err := writeScanText(stdout, results, !*noColor && isLikelyTTY(stdout)); err != nil {
 		return err
 	}
-	if len(dispatchResults) > 0 || dedupSilenced > 0 {
-		writeDispatchSummary(stdout, dispatchResults, dedupSilenced)
+	if len(dispatchResults) > 0 || dedupSilenced > 0 || approvalSilenced > 0 {
+		writeDispatchSummary(stdout, dispatchResults, dedupSilenced, approvalSilenced)
 	}
 	return nil
 }
@@ -219,7 +220,39 @@ func filterByDedup(st *store.Store, events []notifier.Event, now time.Time, ttl 
 	return kept, silenced
 }
 
-// markSentEvents records each event whose channel dispatched successfully.
+// filterByApproval drops events for which the user has already recorded
+// a decision (approved or rejected). Returns the kept events and a count
+// of decided-and-silenced ones for output rendering. A nil store is the
+// no-op.
+//
+// Decisions take priority over TTL dedup: an approved or rejected
+// (container, digest) is silenced forever, not just within a window.
+func filterByApproval(st *store.Store, events []notifier.Event, logger *slog.Logger) ([]notifier.Event, int) {
+	if st == nil {
+		return events, 0
+	}
+	kept := make([]notifier.Event, 0, len(events))
+	decided := 0
+	for _, e := range events {
+		key := store.ApprovalKey{ContainerID: e.Container, RegistryDigest: e.RegistryDigest}
+		rec, err := st.LookupDecision(key)
+		if err != nil {
+			// Fail open — better to over-notify than to suppress on a store
+			// failure.
+			logger.Warn("approval lookup failed; sending event anyway", "container", e.Container, "err", err)
+			kept = append(kept, e)
+			continue
+		}
+		if rec == nil {
+			kept = append(kept, e)
+			continue
+		}
+		// User has already decided about this exact (container, digest).
+		// No notification needed regardless of TTL.
+		decided++
+	}
+	return kept, decided
+}
 // We deliberately treat "all channels failed" as "not delivered" — better to
 // re-notify next scan than to silently swallow a failed alert.
 func markSentEvents(st *store.Store, events []notifier.Event, results []notifier.DispatchResult, when time.Time, logger *slog.Logger) {
@@ -394,7 +427,7 @@ func writeScanJSON(w io.Writer, results []scanner.Result, dispatch []notifier.Di
 	return enc.Encode(envelope)
 }
 
-func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult, dedupSilenced int) {
+func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult, dedupSilenced, approvalSilenced int) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Notifications:")
 	for _, r := range results {
@@ -406,6 +439,9 @@ func writeDispatchSummary(w io.Writer, results []notifier.DispatchResult, dedupS
 		default:
 			fmt.Fprintf(w, "  %s: sent %d (%d filtered)\n", r.Notifier, r.Sent, r.Skipped)
 		}
+	}
+	if approvalSilenced > 0 {
+		fmt.Fprintf(w, "  (%d event(s) silenced by recorded decision; clear with `bulwark queue clear`)\n", approvalSilenced)
 	}
 	if dedupSilenced > 0 {
 		fmt.Fprintf(w, "  (%d event(s) silenced by dedup; use --dedup-ttl=0 to disable)\n", dedupSilenced)

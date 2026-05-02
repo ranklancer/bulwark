@@ -18,6 +18,9 @@
 //	                             deployments can plug Bulwark in as the "brain"
 //	bulwark run                  run the daemon — periodic scan loop combined with
 //	                             the HTTP server in a single always-on process
+//	bulwark queue                inspect / approve / reject pending REVIEW updates;
+//	                             decisions silence notifications about specific
+//	                             (container, digest) pairs forever
 package main
 
 import (
@@ -84,6 +87,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdServe(args[1:], stdout, stderr)
 	case "run":
 		return cmdRun(args[1:], stdout, stderr)
+	case "queue":
+		return cmdQueue(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -107,6 +112,7 @@ Commands:
   history             Inspect and manage persistent scan history & dedup state
   serve               Run the HTTP server (DIUN webhook receiver) only
   run                 Run the daemon: periodic scan loop + HTTP server
+  queue               Inspect / approve / reject pending REVIEW updates
 
 Run "bulwark <command> --help" for command-specific options.`)
 }

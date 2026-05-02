@@ -14,9 +14,9 @@ substantially further: every update is _understood_ before it is applied.
 > **Status:** early development. Shipped: risk classifier; YAML config;
 > OCI registry client; GitHub release-notes fetcher; Docker socket client;
 > one-shot scanner; notification dispatcher (Slack / Discord / generic JSON
-> webhooks); persistent state (notification dedup with TTL, scan history);
-> HTTP server with DIUN-compatible webhook receiver; continuously-running
-> daemon (`bulwark run`) that combines periodic scans with the HTTP server.
+> webhooks); persistent state (notification dedup with TTL, scan history,
+> approval queue with approve/reject/forget); HTTP server with DIUN-
+> compatible webhook receiver; continuously-running daemon (`bulwark run`).
 > Up next: update orchestration with health-verified rollback, snapshot
 > backends, and the web UI.
 
@@ -75,6 +75,15 @@ bulwark history list --data-dir ./data
 bulwark history show latest --data-dir ./data
 bulwark history clear --data-dir ./data    # force re-notify on next scan
 bulwark history prune --keep 30 --data-dir ./data
+
+# Act on the approval queue. Decisions silence notifications about a
+# specific (container, image-digest) pair forever — the next distinct
+# registry digest re-opens the question.
+bulwark queue list --data-dir ./data
+bulwark queue approve sonarr --note "tested in dev" --data-dir ./data
+bulwark queue reject auth --data-dir ./data
+bulwark queue forget sonarr --data-dir ./data    # re-open the question
+bulwark queue clear --data-dir ./data
 
 # Send a synthetic event to every configured channel — useful for verifying
 # webhook URLs and per-channel formatting without waiting for a real update.
@@ -185,7 +194,8 @@ The same scan runs in CI.
 | 2d    | Persistent state (dedup + history), `bulwark history`    | shipped  |
 | 2e    | HTTP server, DIUN webhook receiver, `bulwark serve`      | shipped  |
 | 2f    | Continuously-running daemon (`bulwark run`)              | shipped  |
-| 2g    | Approval queue, cron-aware scheduler, maintenance windows | next     |
+| 2g    | Approval queue (`bulwark queue` + cycle integration)     | shipped  |
+| 2h    | Cron-aware scheduler, maintenance windows                | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |
