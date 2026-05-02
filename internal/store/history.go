@@ -178,6 +178,13 @@ func (s *Store) ListScans(limit int) ([]ScanRecord, error) {
 		if err != nil {
 			return out, err
 		}
+		// The filename is the canonical handle GetScan expects. Rewrite
+		// rec.ID from the filename so it survives any drift between the
+		// JSON's embedded id and disk reality (hand-edited files, future
+		// schema migrations, partial writes, etc.) — without this, a
+		// drifted record would appear in `bulwark history list` but
+		// vanish on `bulwark history show <id>`.
+		rec.ID = strings.TrimSuffix(strings.TrimPrefix(name, historyFilePrefix), historyFileSuffix)
 		// Strip Results — listings only need the summary. Callers that want
 		// full detail should call GetScan with the ID.
 		rec.Results = nil

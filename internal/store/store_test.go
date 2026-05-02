@@ -254,6 +254,31 @@ func TestRecordScan_PrunesPastMaxHistory(t *testing.T) {
 	}
 }
 
+func TestListScans_IDDerivedFromFilenameSurvivesDrift(t *testing.T) {
+	// Simulate the case where an on-disk scan file's content has a
+	// different "id" than the filename (hand-edited, partial migration,
+	// etc.). ListScans must return an ID that GetScan can resolve.
+	s := openTestStore(t)
+	hist := filepath.Join(s.DataDir, "history", "scan-canonical-id.json")
+	body := `{"version":1,"record":{"id":"different-from-filename","started_at":"2026-05-01T09:00:00Z","finished_at":"2026-05-01T09:00:01Z","summary":{"total":0}}}`
+	if err := os.WriteFile(hist, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scans, err := s.ListScans(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scans) != 1 {
+		t.Fatalf("len = %d", len(scans))
+	}
+	if scans[0].ID != "canonical-id" {
+		t.Errorf("ListScans returned id %q, want %q (filename-derived)", scans[0].ID, "canonical-id")
+	}
+	if _, err := s.GetScan(scans[0].ID); err != nil {
+		t.Errorf("GetScan with the ListScans-returned ID failed: %v", err)
+	}
+}
+
 func TestGetScan_NotFound(t *testing.T) {
 	s := openTestStore(t)
 	_, err := s.GetScan("nonexistent")

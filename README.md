@@ -217,6 +217,13 @@ The same scan runs in CI.
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |
 | 6     | Hooks, scheduling, multi-arch images                     | planned  |
 
+## Deployment
+
+For a host-side deployment (Docker Compose, reverse proxy, TLS, optional
+DIUN integration) see [`docs/DEPLOY.md`](docs/DEPLOY.md). All examples use
+the `bulwark.example.com` placeholder — substitute your real hostname in
+your own untracked files.
+
 ## User Acceptance Testing
 
 A step-by-step smoke-test playbook lives in
