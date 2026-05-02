@@ -98,9 +98,11 @@ bulwark serve --config ./bulwark.yaml --data-dir ./data
 #   POST /api/v1/webhooks/diun    DIUN webhook receiver
 #   GET  /healthz, /readyz        liveness / readiness probes
 
-# Run the daemon — periodic scans + HTTP server in a single always-on
-# process. SIGINT or SIGTERM trigger a graceful shutdown.
+# Run the daemon — periodic scans + HTTP server + embedded dashboard
+# in a single always-on process. SIGINT or SIGTERM trigger a graceful
+# shutdown.
 bulwark run --config ./bulwark.yaml --data-dir ./data --scan-interval 6h
+# Then visit http://localhost:8080/ for the dashboard.
 
 # Same daemon, plus auto-apply qualifying updates: SAFE always, REVIEW
 # updates that have been approved via `bulwark queue approve`. BREAKING
@@ -208,11 +210,20 @@ The same scan runs in CI.
 | 4     | Filesystem snapshot backends (ZFS, Btrfs)                | shipped  |
 | 5     | Pre/post/rollback update hooks                           | shipped  |
 | 6     | HTTP REST API for state inspection + decisions           | shipped  |
-| 7     | React/Tailwind web dashboard on top of the API           | next     |
+| 7     | Embedded minimal web dashboard (vanilla JS)              | shipped  |
+| 8     | React/Tailwind dashboard (richer SPA on the same API)    | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |
 | 6     | Hooks, scheduling, multi-arch images                     | planned  |
+
+## User Acceptance Testing
+
+A step-by-step smoke-test playbook lives in
+[`docs/UAT.md`](docs/UAT.md) — twelve sections covering everything from
+"binary runs" to "rollback on health failure" to "pre-update hooks fire
+with the right env vars". Each section is independent so you can skip
+features that aren't enabled in your deployment.
 
 ## License
 

@@ -14,10 +14,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
+
+	"github.com/bulwark-docker/bulwark/internal/api/ui"
 )
 
 // Server wraps an http.Server with Bulwark-specific lifecycle helpers.
@@ -46,6 +50,11 @@ func NewServer(addr string, diun *DIUNHandler, state *StateHandler, logger *slog
 	if state != nil {
 		state.Register(mux)
 	}
+
+	// Embedded dashboard. Mount at "/" so users hitting the daemon's
+	// listener with a browser get something useful by default. The UI is
+	// purely a client-side renderer over /api/v1/* — no extra surface.
+	mountUI(mux, logger)
 
 	return &Server{
 		HTTPServer: &http.Server{
@@ -128,4 +137,41 @@ func (s *statusRecorder) WriteHeader(code int) {
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
+}
+
+// mountUI wires the embedded dashboard onto mux. We serve only "/" (so the
+// route doesn't shadow the API namespace) and rely on the dashboard's JS
+// to fetch /api/v1/*. A future build that ships static assets (CSS, JS,
+// fonts) under a /ui/ prefix will mount those there separately.
+func mountUI(mux *http.ServeMux, logger *slog.Logger) {
+	uiSub, err := fs.Sub(ui.FS(), ".")
+	if err != nil {
+		logger.Warn("api: could not initialise embedded UI", "err", err)
+		return
+	}
+	indexBytes, err := fs.ReadFile(uiSub, "index.html")
+	if err != nil {
+		logger.Warn("api: embedded index.html missing", "err", err)
+		return
+	}
+	// "GET /{$}" matches only the literal root path; without {$} the pattern
+	// would be a subtree wildcard and shadow every unmounted GET path,
+	// turning genuine 404s into 200s and confusing 405 responses on other
+	// methods.
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		// Strict-ish CSP: scripts and styles inline (we ship them inline
+		// in index.html), connect-src self for the /api/v1/* fetches.
+		w.Header().Set("Content-Security-Policy",
+			strings.Join([]string{
+				"default-src 'none'",
+				"script-src 'self' 'unsafe-inline'",
+				"style-src 'self' 'unsafe-inline'",
+				"connect-src 'self'",
+				"img-src 'self' data:",
+				"frame-ancestors 'none'",
+			}, "; "))
+		_, _ = w.Write(indexBytes)
+	})
 }
