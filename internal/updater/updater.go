@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/snapshot"
 )
 
@@ -53,6 +54,10 @@ type Updater struct {
 	// the snapshot is destroyed. Setting Snapshots without setting
 	// SnapshotTarget on an Apply call is a no-op for that call.
 	Snapshots snapshot.Backend
+
+	// Hooks runs lifecycle hook scripts. nil means use the default
+	// hooks.ExecRunner. Tests inject hooks.FakeRunner.
+	Hooks hooks.Runner
 
 	// HealthTimeout is the upper bound on how long we wait for the new
 	// container to become healthy. Zero means use the default (60s).
@@ -104,6 +109,14 @@ type ApplyOptions struct {
 	// SnapshotLabel is a free-form label embedded in the snapshot name,
 	// useful when listing snapshots later. Defaults to the container name.
 	SnapshotLabel string
+
+	// PreUpdateHook, PostUpdateHook, RollbackHook are paths to executable
+	// scripts on the host. Empty paths disable the corresponding hook.
+	// Pre-update failure aborts the update; post-update and rollback
+	// failures are logged but non-fatal.
+	PreUpdateHook  string
+	PostUpdateHook string
+	RollbackHook   string
 }
 
 // Apply runs the full pull + recreate + verify + (rollback) pipeline.
@@ -121,16 +134,13 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 	if logger == nil {
 		logger = slog.Default()
 	}
+	hookRunner := u.Hooks
+	if hookRunner == nil {
+		hookRunner = hooks.ExecRunner{}
+	}
 	res := Result{NewImage: targetImage}
 
-	// --- 1. Pull -----------------------------------------------------------
-	logger.Info("updater: pulling image", "image", targetImage)
-	if err := u.Docker.PullImage(ctx, targetImage); err != nil {
-		res.Err = fmt.Errorf("pull: %w", err)
-		return res
-	}
-
-	// --- 2. Inspect --------------------------------------------------------
+	// --- 2. Inspect first (we need OldImage for the pre-update hook) ------
 	insp, err := u.Docker.InspectContainer(ctx, containerID)
 	if err != nil {
 		res.Err = fmt.Errorf("inspect: %w", err)
@@ -145,6 +155,37 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 	originalName := insp.NameWithoutSlash()
 	if originalName == "" {
 		res.Err = errors.New("inspect: container has no name")
+		return res
+	}
+
+	// hctx carries the per-update facts every hook receives.
+	hctx := hooks.Context{
+		Container:   originalName,
+		ContainerID: insp.ID,
+		OldImage:    insp.ImageRef,
+		NewImage:    targetImage,
+	}
+
+	// --- 1.5. Pre-update hook ----------------------------------------------
+	// Runs BEFORE pull so users can drain connections / take application-
+	// level snapshots before any system mutations happen. Failure aborts.
+	if opts.PreUpdateHook != "" {
+		hctx.Action = hooks.ActionPreUpdate
+		out, err := hookRunner.Run(ctx, opts.PreUpdateHook, hctx, 0)
+		if err != nil {
+			res.Err = fmt.Errorf("pre-update hook: %w", err)
+			logger.Warn("updater: pre-update hook failed; aborting update",
+				"hook", opts.PreUpdateHook, "container", originalName,
+				"output", trimHookOutput(out))
+			return res
+		}
+		logger.Info("updater: pre-update hook ok", "hook", opts.PreUpdateHook, "container", originalName)
+	}
+
+	// --- 1. Pull -----------------------------------------------------------
+	logger.Info("updater: pulling image", "image", targetImage)
+	if err := u.Docker.PullImage(ctx, targetImage); err != nil {
+		res.Err = fmt.Errorf("pull: %w", err)
 		return res
 	}
 
@@ -166,6 +207,7 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 			return res
 		}
 		res.SnapshotID = snapID
+		hctx.SnapshotID = snapID
 		logger.Info("updater: filesystem snapshot taken", "id", snapID, "target", opts.SnapshotTarget)
 	}
 
@@ -191,14 +233,14 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 	// --- 5. Create the new container ---------------------------------------
 	createCfg, err := docker.NewCreateConfigFromInspect(insp, targetImage)
 	if err != nil {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", res.SnapshotID, logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", res.SnapshotID, hctx, opts.RollbackHook, hookRunner, logger)
 		res.RolledBack = true
 		res.Err = fmt.Errorf("build create config: %w", err)
 		return res
 	}
 	newID, err := u.Docker.CreateContainer(ctx, originalName, createCfg)
 	if err != nil {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", res.SnapshotID, logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, "", res.SnapshotID, hctx, opts.RollbackHook, hookRunner, logger)
 		res.RolledBack = true
 		res.Err = fmt.Errorf("create new: %w", err)
 		return res
@@ -207,7 +249,7 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 
 	// --- 6. Start the new container ----------------------------------------
 	if err := u.Docker.StartContainer(ctx, newID); err != nil {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, hctx, opts.RollbackHook, hookRunner, logger)
 		res.RolledBack = true
 		res.Err = fmt.Errorf("start new: %w", err)
 		return res
@@ -217,7 +259,7 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 	healthy, finalStatus, healthErr := u.waitForHealthy(ctx, newID)
 	res.HealthStatus = finalStatus
 	if !healthy {
-		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, logger)
+		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, hctx, opts.RollbackHook, hookRunner, logger)
 		res.RolledBack = true
 		if healthErr != nil {
 			res.Err = fmt.Errorf("health: %w", healthErr)
@@ -235,8 +277,26 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 		logger.Warn("updater: failed to remove preserved old container", "id", insp.ID, "err", err)
 	}
 	u.tryDestroySnapshot(ctx, &res, logger)
+
+	// --- 9. Post-update hook -----------------------------------------------
+	// The new container is healthy, the old has been cleaned up. Failure
+	// of this hook is logged but does NOT roll back — the update is done.
+	if opts.PostUpdateHook != "" {
+		hctx.Action = hooks.ActionPostUpdate
+		hctx.NewDigest = "" // populated by callers when known
+		hooks.Invoke(ctx, hookRunner, opts.PostUpdateHook, hctx, logger)
+	}
 	logger.Info("updater: update applied", "container", originalName, "new_id", newID, "old_id", insp.ID)
 	return res
+}
+
+// trimHookOutput is a tiny helper for surfacing hook stdout/stderr in
+// log lines without dumping kilobytes.
+func trimHookOutput(b []byte) string {
+	if len(b) > 256 {
+		return strings.TrimSpace(string(b[:256])) + "..."
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // tryDestroySnapshot is a best-effort cleanup of a successfully-applied
@@ -255,12 +315,12 @@ func (u *Updater) tryDestroySnapshot(ctx context.Context, res *Result, logger *s
 // rollbackPreserved reverses a partially-completed update. The new
 // container (if created) is removed; the filesystem snapshot (if taken)
 // is restored; the preserved old container is renamed back to its
-// original name and started.
+// original name and started; finally the rollback hook (if any) fires.
 //
 // Order matters: restore the FS snapshot BEFORE starting the old container
 // so it sees the rolled-back state of its volumes. The old container itself
 // is unchanged by the snapshot restore — we're rolling back the data.
-func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, preservedName, newID, snapshotID string, logger *slog.Logger) error {
+func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, preservedName, newID, snapshotID string, hctx hooks.Context, rollbackHook string, hookRunner hooks.Runner, logger *slog.Logger) error {
 	logger.Warn("updater: rolling back", "old_id", oldID, "new_id", newID, "snapshot", snapshotID)
 
 	// Use a fresh context with a generous timeout so an outer cancellation
@@ -292,6 +352,17 @@ func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, pr
 	if err := u.Docker.StartContainer(rbCtx, oldID); err != nil {
 		rbErrs = append(rbErrs, "start old: "+err.Error())
 	}
+
+	// Rollback hook fires AFTER the old container is back online — gives
+	// users a clean signal that the rollback completed (page on-call,
+	// log to a tracking system, etc.). Failures here are non-fatal; we've
+	// already done the dangerous part.
+	if rollbackHook != "" && hookRunner != nil {
+		hctx.Action = hooks.ActionRollback
+		hctx.SnapshotID = snapshotID
+		hooks.Invoke(rbCtx, hookRunner, rollbackHook, hctx, logger)
+	}
+
 	if len(rbErrs) > 0 {
 		return fmt.Errorf("rollback errors: %s", strings.Join(rbErrs, "; "))
 	}

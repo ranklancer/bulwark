@@ -55,6 +55,11 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 			opts.SnapshotTarget = ds
 			opts.SnapshotLabel = r.Container.Name
 		}
+		// Pre/post/rollback hook paths from the container's labels.
+		// Empty paths disable the corresponding hook.
+		opts.PreUpdateHook = r.Container.Labels["bulwark.hook.pre-update"]
+		opts.PostUpdateHook = r.Container.Labels["bulwark.hook.post-update"]
+		opts.RollbackHook = r.Container.Labels["bulwark.hook.rollback"]
 		logger.Info("apply: starting", "container", r.Container.Name, "image", r.Container.Image, "level", r.Assessment.Level.String(), "snapshot_target", opts.SnapshotTarget)
 		res := u.ApplyWithOptions(ctx, r.Container.ID, r.Reference.String(), opts)
 		oc := applyOutcome{

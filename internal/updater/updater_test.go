@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/snapshot"
 )
 
@@ -199,11 +200,12 @@ func TestApply_HappyPath_NoHealthcheck(t *testing.T) {
 	}
 
 	// Expected operation order:
-	//   pull → inspect old → stop old → rename old → create new → start new →
-	//   inspect new (health) ... → remove old
+	//   inspect old → pull → stop old → rename old → create new → start new →
+	//   inspect new (health) ... → remove old.
+	// Inspect runs first so we know OldImage for hook context before pulling.
 	want := []string{
-		"pull:lscr.io/linuxserver/sonarr:4.0.11-ls47",
 		"inspect:old-id",
+		"pull:lscr.io/linuxserver/sonarr:4.0.11-ls47",
 		"stop:old-id",
 		"rename:old-id->sonarr-bulwark-old",
 		"create:sonarr",
@@ -505,9 +507,13 @@ func TestApply_PullFailure_AbortsBeforeAnyMutation(t *testing.T) {
 	if res.RolledBack {
 		t.Error("RolledBack should be false: nothing was changed yet")
 	}
-	// Only the pull should have been attempted.
-	if len(fd.ops) != 1 || !strings.HasPrefix(fd.ops[0], "pull:") {
-		t.Errorf("expected only pull attempt, got %v", fd.ops)
+	// Inspect (read-only) is OK; no mutations should have happened.
+	for _, op := range fd.ops {
+		if strings.HasPrefix(op, "stop:") || strings.HasPrefix(op, "rename:") ||
+			strings.HasPrefix(op, "create:") || strings.HasPrefix(op, "remove:") ||
+			strings.HasPrefix(op, "start:") {
+			t.Errorf("post-pull-failure mutation leaked: %s\nall: %v", op, fd.ops)
+		}
 	}
 }
 
@@ -536,6 +542,163 @@ func TestApply_InspectMissingContainerErrors(t *testing.T) {
 	res := u.Apply(context.Background(), "absent", "x:1")
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "not found") {
 		t.Errorf("expected not-found error, got %v", res.Err)
+	}
+}
+
+// --- hook integration -------------------------------------------------------
+
+func TestApplyWithOptions_PreUpdateHookFires(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "lscr.io/.../sonarr:1"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+	hr := hooks.NewFakeRunner()
+	hr.On("/hooks/pre.sh", []byte("ok"), nil)
+	u := &Updater{
+		Docker:         fd,
+		Hooks:          hr,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "lscr.io/.../sonarr:2",
+		ApplyOptions{PreUpdateHook: "/hooks/pre.sh"})
+	if res.Err != nil {
+		t.Fatalf("Apply: %v", res.Err)
+	}
+	calls := hr.Calls()
+	if len(calls) < 1 {
+		t.Fatal("expected at least one hook call")
+	}
+	if calls[0].Path != "/hooks/pre.sh" {
+		t.Errorf("first hook = %q", calls[0].Path)
+	}
+	if calls[0].Ctx.Action != hooks.ActionPreUpdate {
+		t.Errorf("first hook action = %q, want pre-update", calls[0].Ctx.Action)
+	}
+	if calls[0].Ctx.OldImage != "lscr.io/.../sonarr:1" {
+		t.Errorf("hook OldImage = %q", calls[0].Ctx.OldImage)
+	}
+	if calls[0].Ctx.NewImage != "lscr.io/.../sonarr:2" {
+		t.Errorf("hook NewImage = %q", calls[0].Ctx.NewImage)
+	}
+}
+
+func TestApplyWithOptions_PreUpdateHookFailureAborts(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "x:1"),
+		},
+	}
+	hr := hooks.NewFakeRunner()
+	hr.On("/hooks/pre.sh", []byte("nope"), errors.New("exit 1"))
+	u := &Updater{Docker: fd, Hooks: hr}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "x:2",
+		ApplyOptions{PreUpdateHook: "/hooks/pre.sh"})
+	if res.Err == nil || !strings.Contains(res.Err.Error(), "pre-update hook") {
+		t.Fatalf("expected pre-update hook error, got %v", res.Err)
+	}
+	// No mutations should have occurred.
+	for _, op := range fd.ops {
+		if strings.HasPrefix(op, "stop:") || strings.HasPrefix(op, "rename:") ||
+			strings.HasPrefix(op, "create:") || strings.HasPrefix(op, "pull:") {
+			t.Errorf("pre-update hook failure must abort before mutations; saw %s", op)
+		}
+	}
+}
+
+func TestApplyWithOptions_PostUpdateHookFiresOnSuccess(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "x:1"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+	hr := hooks.NewFakeRunner()
+	hr.On("/hooks/post.sh", nil, nil)
+	u := &Updater{
+		Docker:         fd,
+		Hooks:          hr,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	if res := u.ApplyWithOptions(context.Background(), "old-id", "x:2",
+		ApplyOptions{PostUpdateHook: "/hooks/post.sh"}); res.Err != nil {
+		t.Fatalf("Apply: %v", res.Err)
+	}
+	var found bool
+	for _, c := range hr.Calls() {
+		if c.Path == "/hooks/post.sh" && c.Ctx.Action == hooks.ActionPostUpdate {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("post-update hook not invoked: %+v", hr.Calls())
+	}
+}
+
+func TestApplyWithOptions_PostUpdateFailureNonFatal(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "x:1"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+	hr := hooks.NewFakeRunner()
+	hr.On("/hooks/post.sh", []byte("oops"), errors.New("exit 1"))
+	u := &Updater{
+		Docker:         fd,
+		Hooks:          hr,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "x:2",
+		ApplyOptions{PostUpdateHook: "/hooks/post.sh"})
+	if res.Err != nil {
+		t.Errorf("post-update hook failure should not fail Apply: %v", res.Err)
+	}
+}
+
+func TestApplyWithOptions_RollbackHookFiresOnRollback(t *testing.T) {
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": sampleInspect("old-id", "sonarr", "x:1"),
+		},
+	}
+	fd.healthTimeline = func(i int) docker.HealthStatus {
+		if i == 0 {
+			return docker.HealthNone
+		}
+		return docker.HealthUnhealthy
+	}
+	hr := hooks.NewFakeRunner()
+	hr.On("/hooks/rb.sh", nil, nil)
+	u := &Updater{
+		Docker:         fd,
+		Hooks:          hr,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+	}
+	res := u.ApplyWithOptions(context.Background(), "old-id", "x:2",
+		ApplyOptions{RollbackHook: "/hooks/rb.sh"})
+	if !res.RolledBack {
+		t.Fatal("expected rollback")
+	}
+	var found bool
+	for _, c := range hr.Calls() {
+		if c.Path == "/hooks/rb.sh" && c.Ctx.Action == hooks.ActionRollback {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("rollback hook not invoked: %+v", hr.Calls())
 	}
 }
 
