@@ -81,12 +81,47 @@ snapshots:
     keep_last: 5
     keep_days: 30
 
-# Post-update health verification.
+# Post-update health verification. When a container declares its own
+# HEALTHCHECK start_period, that value overrides `timeout` upward so
+# services with slow startup probes aren't rolled back prematurely.
 health:
   timeout:      120s
   interval:     5s
   threshold:    3
   grace_period: 10s
+
+# Pre / post / rollback update hooks. Container labels
+# (bulwark.hook.pre-update, bulwark.hook.post-update,
+# bulwark.hook.rollback) point at scripts on the host. This block
+# gates which paths are allowed.
+hooks:
+  # When set, only scripts under this directory may run. Paths
+  # supplied via labels that escape the root (symlinks, "..") are
+  # rejected. Empty disables the sandbox — every label-supplied path
+  # is honoured. Strongly recommended for any --apply deployment.
+  hooks_root: ""
+
+# Private-registry credentials. Bulwark resolves credentials in this
+# order: explicit YAML hosts first, then ~/.docker/config.json (if
+# enabled). Hosts not listed here fall through to anonymous pulls.
+registries:
+  # Read auths / credHelpers / credsStore from a Docker CLI config.
+  # When true, `docker login <registry>` on the host is enough; no
+  # YAML credential changes needed.
+  use_docker_config: false
+  # Optional override for the config.json path. Empty defaults to
+  # $HOME/.docker/config.json (the bulwark user's home inside the
+  # container — typically /home/bulwark/.docker/config.json).
+  docker_config_path: ""
+  # Per-host static credentials. Either username + password (Basic
+  # auth, htpasswd-style registries) OR identity_token (OAuth2
+  # refresh token, GHCR / Docker Hub PATs).
+  hosts:
+    # registry.example.com:
+    #   username: my-user
+    #   password: "${REGISTRY_EXAMPLE_PASSWORD}"
+    # ghcr.io:
+    #   identity_token: "${GITHUB_TOKEN}"
 
 # Notification channels. Disabled by default — enable each channel you want.
 notifications:
@@ -209,6 +244,12 @@ api:
     groups_header:  Remote-Groups     # default
     required_group: ""                # optional; restrict access to one group
 
+  # Per-IP rate limit on every API + dashboard request, including the
+  # DIUN webhook. 0 disables. The default (60 req/min, 10 burst) is
+  # comfortable for human dashboard use + leaves DIUN headroom while
+  # blunting credential-stuffing attempts.
+  rate_limit_per_minute: 60
+
   # DIUN-compatibility webhook receiver at POST /api/v1/webhooks/diun.
   # Lets users with existing DIUN deployments plug Bulwark in as the
   # "brain" without changing their notification setup.
@@ -216,6 +257,12 @@ api:
     # Optional shared secret. When set, DIUN must include it on each call
     # via Authorization: Bearer <token> or X-Bulwark-Token. Empty = anonymous.
     token: "${BULWARK_DIUN_TOKEN}"
+    # Optional HMAC secret. When set, requests must additionally carry
+    # X-Bulwark-Timestamp + X-Bulwark-Signature headers; older-than-5min
+    # signatures are rejected (replay protection). Pair with the
+    # standalone `bulwark-diun-relay` sidecar that signs DIUN's plain
+    # webhook on the way through.
+    hmac_secret: "${BULWARK_DIUN_HMAC_SECRET}"
     # Per-event silencing when --data-dir is configured. "0" disables.
     dedup_ttl: "24h"
 

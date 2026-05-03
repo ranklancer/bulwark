@@ -1,36 +1,67 @@
-# Example deployment of Bulwark. Adapt the volume mounts and security_opt
-# block to your environment. All addresses below use RFC-reserved ranges.
+# Example deployment of Bulwark. Adapt the volume mounts + auth block to
+# your environment. All addresses below use RFC-reserved ranges.
 #
 # Quick start:
-#   1. Copy configs/bulwark.example.yaml to ./config/bulwark.yaml
-#   2. Adjust the config to match your environment
-#   3. docker compose -f docker-compose.example.yaml up -d
-#   4. Visit http://localhost:8080 once the API server is implemented
+#   1. Generate a bearer token:        openssl rand -hex 32
+#   2. Copy configs/bulwark.example.yaml to ./config/bulwark.yaml; under
+#      api.auth set type: bearer + token: ${BULWARK_API_TOKEN}.
+#   3. Put the token into ./.env:      BULWARK_API_TOKEN=<the-token>
+#   4. docker compose -f docker-compose.example.yaml up -d
+#   5. Visit http://localhost:8080/, paste the same token at /login.
+#
+# Production: pin to a specific version tag (e.g. :v0.1.0) instead of
+# :latest so a `docker compose pull` doesn't silently roll new code into
+# your environment.
 
 services:
   bulwark:
-    image: ghcr.io/bulwark-docker/bulwark:latest
+    image: ghcr.io/ranklancer/bulwark:latest
     container_name: bulwark
     restart: unless-stopped
+    command:
+      - run
+      - --config=/config/bulwark.yaml
+      - --data-dir=/data
+      - --listen=:8080
+      # Add --apply to enable auto-application of qualifying updates
+      # (SAFE always; REVIEW after you approve them via the dashboard).
+      # Start in scan-only mode and turn this on once you trust the
+      # classifier output for your stack.
+      # - --apply
     volumes:
-      # Read-only Docker socket access — Bulwark only mutates Docker via this.
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker socket. Bulwark needs read for scans; --apply additionally
+      # needs write. Mount :ro for scan-only deployments.
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./config:/config
       - ./data:/data
+      # Optional: mount your hooks directory if you use bulwark.hook.*
+      # labels. Restrict the path with hooks.hooks_root in YAML so a
+      # mis-labelled container can't run a script outside this tree.
+      # - ./hooks:/hooks:ro
     environment:
       - TZ=UTC
-      - BULWARK_CONFIG=/config/bulwark.yaml
-      # Secrets passed via environment, referenced from YAML with ${VAR} syntax.
-      # - BULWARK_HASS_TOKEN=
-      # - BULWARK_SLACK_WEBHOOK=
-      # - BULWARK_DISCORD_WEBHOOK=
-      # - BULWARK_SMTP_PASSWORD=
+      # Secrets passed via environment, referenced from YAML with ${VAR}
+      # syntax. Define in a sibling .env file (do NOT commit it).
+      - BULWARK_API_TOKEN
+      # - BULWARK_DIUN_TOKEN
+      # - BULWARK_HASS_TOKEN
+      # - BULWARK_SLACK_WEBHOOK
+      # - BULWARK_DISCORD_WEBHOOK
+      # - BULWARK_SMTP_PASSWORD
     ports:
       - "8080:8080"
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    # Docker socket GID handling: most hosts have /var/run/docker.sock
+    # owned by root:docker with mode 660. The bulwark UID inside the
+    # container won't be in the docker group on the host, so --apply
+    # writes will fail with EACCES. Run `getent group docker | cut -d: -f3`
+    # on the host to find the GID, then uncomment + set:
+    # group_add:
+    #   - "999"
+    #
     # ZFS snapshot backend requires either:
     #   (a) mounting the host's ZFS tools and /dev/zfs, or
     #   (b) running the container with --privileged.
@@ -39,6 +70,12 @@ services:
     #   - /usr/sbin/zfs:/usr/sbin/zfs:ro
     #   - /usr/sbin/zpool:/usr/sbin/zpool:ro
     #   - /dev/zfs:/dev/zfs
+    #
+    # Restic snapshot backend needs the restic binary on PATH and the
+    # repository password file mounted read-only. Uncomment + adjust:
+    # volumes:
+    #   - /usr/local/bin/restic:/usr/local/bin/restic:ro
+    #   - ./secrets/restic.password:/secrets/restic.password:ro
 
     labels:
       bulwark.enable: "false"   # Bulwark does not update itself
