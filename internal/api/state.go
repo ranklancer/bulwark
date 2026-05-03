@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,6 +36,12 @@ type StateHandler struct {
 	// CSRF configures the cross-site-request-forgery defense applied to
 	// mutating endpoints. Nil uses DefaultCSRFConfig.
 	CSRF *CSRFConfig
+
+	// TriggerScan, when set, runs one scan cycle on demand. The daemon's
+	// `bulwark run` wires this to the same scan-job closure the scheduler
+	// invokes, so a POST /api/v1/scans queue-jumps the next periodic
+	// firing. nil omits the route.
+	TriggerScan func(ctx context.Context) error
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
@@ -49,6 +56,9 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET /api/v1/scans", h.authed(h.listScans))
 	mux.HandleFunc("GET /api/v1/scans/{id}", h.authed(h.getScan))
+	if h.TriggerScan != nil {
+		mux.HandleFunc("POST /api/v1/scans", h.authed(h.csrfProtect(h.postScan)))
+	}
 	mux.HandleFunc("GET /api/v1/queue", h.authed(h.listQueue))
 	mux.HandleFunc("POST /api/v1/queue", h.authed(h.csrfProtect(h.postDecision)))
 	mux.HandleFunc("DELETE /api/v1/queue/{container}", h.authed(h.csrfProtect(h.forgetDecision)))
@@ -122,6 +132,28 @@ func (h *StateHandler) getScan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rec)
+}
+
+// postScan triggers an immediate scan cycle. Returns 202 Accepted so
+// long-running scans don't tie up the request: the cycle's outcome is
+// observable via the next `GET /api/v1/scans` listing.
+func (h *StateHandler) postScan(w http.ResponseWriter, r *http.Request) {
+	if h.TriggerScan == nil {
+		writeJSON(w, http.StatusNotImplemented, errEnvelope(errors.New("scan trigger not configured")))
+		return
+	}
+	// Fire and forget. The cycle records its own history; the response
+	// just acknowledges receipt. We could block here and return a record
+	// summary, but a slow scan would tie up the request and the dashboard
+	// already polls `/api/v1/scans` regularly.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := h.TriggerScan(ctx); err != nil && h.Logger != nil {
+			h.Logger.Warn("api: triggered scan failed", "err", err)
+		}
+	}()
+	writeJSON(w, http.StatusAccepted, map[string]any{"scheduled": true})
 }
 
 // --- /api/v1/queue -----------------------------------------------------------

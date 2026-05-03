@@ -7,6 +7,7 @@ import (
 
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
+	"github.com/bulwark-docker/bulwark/internal/scheduler"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
 )
@@ -21,9 +22,15 @@ type scanCycleConfig struct {
 	DedupTTL   time.Duration        // 0 disables dedup silencing
 	Updater    *updater.Updater     // nil disables auto-apply
 	Apply      bool                 // true to enable auto-apply; requires Updater
-	Now        func() time.Time     // injected for deterministic tests
-	Logger     *slog.Logger
-	All        bool // include stopped containers
+	DryRun     bool                 // true to log what would be applied without touching containers
+	// MaintenanceWindows, when non-empty, gates the apply phase. The
+	// scan + notification pipeline always runs; only mutating the
+	// containers is constrained. When the slice is empty, apply runs
+	// whenever the rest of the gates allow it (scheduler defaults).
+	MaintenanceWindows []scheduler.Window
+	Now                func() time.Time     // injected for deterministic tests
+	Logger             *slog.Logger
+	All                bool // include stopped containers
 }
 
 // scanCycleResult holds everything callers want to render afterwards. We
@@ -35,8 +42,12 @@ type scanCycleResult struct {
 	DedupSilenced    int                    // events suppressed by TTL silencing
 	ApprovalSilenced int                    // events suppressed by an existing user decision
 	Applies          map[string]applyOutcome // keyed by container name
-	StartedAt        time.Time
-	FinishedAt       time.Time
+	// ApplyGated is true when --apply was set but the maintenance-window
+	// filter blocked the apply phase. Surfaced so callers can render a
+	// clear "outside window" message instead of "nothing eligible".
+	ApplyGated bool
+	StartedAt  time.Time
+	FinishedAt time.Time
 }
 
 // runScanCycle executes one full pipeline iteration: scan → events → dedup
@@ -68,7 +79,23 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 	// surface "Auto-updated" / "ROLLBACK" notifications instead of
 	// double-notifying ("update available" then "applied").
 	if cfg.Apply && cfg.Updater != nil {
-		res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, logger)
+		// Maintenance-window gate: when configured, only mutate
+		// containers during a permitted window. Scans still run
+		// (read-only); notifications still fire so operators see
+		// pending work even outside the window.
+		if len(cfg.MaintenanceWindows) > 0 && !scheduler.AnyActive(now(), cfg.MaintenanceWindows) {
+			res.ApplyGated = true
+			logger.Info("apply: outside maintenance window; skipping apply phase",
+				"now", now().Format(time.RFC3339),
+				"windows", len(cfg.MaintenanceWindows))
+		} else if cfg.DryRun {
+			// Dry-run: log what would be applied; produce synthetic
+			// success outcomes so the notification path renders the
+			// "Auto-updated" framing operators expect to inspect.
+			res.Applies = applyEligibleDryRun(results, cfg.Store, logger)
+		} else {
+			res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, logger)
+		}
 	}
 
 	if cfg.Dispatcher != nil && len(cfg.Dispatcher.Notifiers()) > 0 {

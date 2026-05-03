@@ -100,6 +100,43 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 	return out
 }
 
+// applyEligibleDryRun mirrors applyEligibleUpdates but never invokes the
+// updater. It returns a synthetic Success outcome for every eligible
+// container so the cycle's notification rendering reflects "would be
+// applied" without making any system mutation. Audit log records each
+// dry-run as `apply.success` with a `dry-run` Detail tag so operators
+// can grep for what would have happened.
+func applyEligibleDryRun(results []scanner.Result, st *store.Store, logger *slog.Logger) map[string]applyOutcome {
+	out := make(map[string]applyOutcome)
+	for _, r := range results {
+		if r.Skipped || r.Err != nil || !r.HasUpdate() || r.Assessment == nil {
+			continue
+		}
+		if !eligibleForApply(r, st) {
+			continue
+		}
+		oc := applyOutcome{
+			Success:  true,
+			NewImage: r.Reference.String(),
+			OldImage: r.Container.Image,
+		}
+		out[r.Container.Name] = oc
+		logger.Info("apply (dry-run): would apply",
+			"container", r.Container.Name,
+			"image", r.Container.Image,
+			"level", r.Assessment.Level.String())
+		st.Audit(store.AuditEvent{
+			Action:    store.ActionApplied,
+			Container: r.Container.Name,
+			Image:     r.Container.Image,
+			Level:     r.Assessment.Level,
+			Digest:    r.RegistryDigest,
+			Detail:    "dry-run",
+		})
+	}
+	return out
+}
+
 // eligibleForApply implements the SAFE-or-approved-REVIEW rule. A nil store
 // disables the approval lookup, which means only SAFE updates qualify.
 func eligibleForApply(r scanner.Result, st *store.Store) bool {

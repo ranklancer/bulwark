@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -405,6 +406,49 @@ func TestAuth_AnonymousAllowedWhenTokenEmpty(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("anonymous = %d, want 200 when Token is empty", resp.StatusCode)
+	}
+}
+
+func TestPostScan_FiresTriggerAndReturns202(t *testing.T) {
+	st := stateFixture(t)
+	called := make(chan struct{}, 1)
+	srv := newStateServer(t, &StateHandler{
+		Store: st,
+		TriggerScan: func(_ context.Context) error {
+			called <- struct{}{}
+			return nil
+		},
+	})
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/scans", strings.NewReader(""))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusAccepted {
+		t.Errorf("status = %d, want 202", resp.StatusCode)
+	}
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("trigger not fired within 1s")
+	}
+}
+
+func TestPostScan_NotMountedWhenTriggerNil(t *testing.T) {
+	st := stateFixture(t)
+	srv := newStateServer(t, &StateHandler{Store: st}) // no TriggerScan
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/scans", strings.NewReader(""))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	// ServeMux returns 405 on POST when only GET is registered for the
+	// same path — that's the correct "the method isn't supported here" signal.
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405 (route not mounted)", resp.StatusCode)
 	}
 }
 

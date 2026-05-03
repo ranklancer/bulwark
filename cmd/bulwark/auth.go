@@ -7,6 +7,7 @@ import (
 
 	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/scheduler"
 )
 
 // hooksRoot pulls the configured Hooks.HooksRoot from the loaded YAML, or
@@ -27,6 +28,28 @@ func buildDIUNHMAC(cfg *config.Config) *api.HMACScheme {
 		return nil
 	}
 	return api.NewHMACScheme([]byte(cfg.API.DIUN.HMACSecret))
+}
+
+// parseMaintenanceWindows reads schedule.maintenance_windows from the
+// loaded config and parses each one. Errors are logged but do not block
+// startup — a misconfigured single window shouldn't take the daemon
+// offline; the operator gets a clear log line and the affected window
+// is dropped.
+func parseMaintenanceWindows(cfg *config.Config, logger *slog.Logger) []scheduler.Window {
+	if cfg == nil {
+		return nil
+	}
+	out := make([]scheduler.Window, 0, len(cfg.Schedule.MaintenanceWindows))
+	for i, mw := range cfg.Schedule.MaintenanceWindows {
+		w, err := scheduler.ParseWindow(mw.Start, mw.End, mw.Days)
+		if err != nil {
+			logger.Warn("schedule: ignoring invalid maintenance window",
+				"index", i, "start", mw.Start, "end", mw.End, "err", err)
+			continue
+		}
+		out = append(out, w)
+	}
+	return out
 }
 
 // buildAuthenticator translates the loaded YAML auth block into a concrete

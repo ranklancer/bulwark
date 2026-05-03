@@ -324,6 +324,65 @@ func TestScanApply_ReviewWithApprovalApplies(t *testing.T) {
 	}
 }
 
+func TestScanApply_DryRunRecordsNoMutation(t *testing.T) {
+	st, _ := store.Open(t.TempDir())
+	rec := &recordingNotifier{name: "test", min: types.RiskSafe}
+	fd := &fakeDocker{
+		containers: []docker.Container{{
+			ID: "old-id", Name: "sonarr",
+			Image:   "lscr.io/linuxserver/sonarr:4.0.10-ls45",
+			ImageID: "sha256:l1",
+			Labels:  map[string]string{},
+		}},
+		images: map[string]*docker.ImageInspect{
+			"sha256:l1": {RepoDigests: []string{"lscr.io/linuxserver/sonarr@sha256:old"}},
+		},
+	}
+	fr := &fakeRegistry{digests: map[string]string{
+		"lscr.io/linuxserver/sonarr:4.0.10-ls45": "sha256:new",
+	}}
+	stubDoc := &stubUpdaterDocker{}
+	upd := &updater.Updater{Docker: stubDoc}
+	deps := scanDeps{
+		Docker:    fd,
+		Registry:  fr,
+		Notifiers: []notifier.Notifier{rec},
+		Store:     st,
+		Updater:   upd,
+		Now:       func() time.Time { return time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC) },
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := cmdScanWith(
+		[]string{"--no-fetch-notes", "--no-color", "--notify", "--apply", "--dry-run"},
+		&stdout, &stderr, deps,
+	); err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+
+	// Updater must NOT have been invoked at all.
+	if stubDoc.pulls != 0 || stubDoc.creates != 0 || stubDoc.stops != 0 {
+		t.Errorf("dry-run leaked mutations: pulls=%d creates=%d stops=%d",
+			stubDoc.pulls, stubDoc.creates, stubDoc.stops)
+	}
+	// Notification still goes out, with AutoUpdated action (synthetic).
+	if len(rec.got) != 1 || rec.got[0].Action != types.ActionAutoUpdated {
+		t.Errorf("expected one synthetic AutoUpdated event, got %+v", rec.got)
+	}
+	// Audit log carries the dry-run tombstone.
+	events, _ := st.ReadAudit(0)
+	found := false
+	for _, e := range events {
+		if e.Action == store.ActionApplied && e.Detail == "dry-run" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected dry-run audit event, got %+v", events)
+	}
+}
+
 func TestScanApply_HealthFailureRollsBack(t *testing.T) {
 	st, _ := store.Open(t.TempDir())
 	rec := &recordingNotifier{name: "test", min: types.RiskSafe}

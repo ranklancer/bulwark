@@ -85,6 +85,7 @@ Flags:`)
 	scanCron := fs.String("cron", "", `cron expression for the scan schedule (5 fields, e.g. "0 3 * * *"); takes precedence over --scan-interval`)
 	noInitialScan := fs.Bool("no-initial-scan", false, "skip the immediate scan at startup")
 	apply := fs.Bool("apply", false, "auto-apply qualifying updates (SAFE always, plus REVIEW updates approved via `bulwark queue approve`); BREAKING never auto-applies")
+	dryRun := fs.Bool("dry-run", false, "with --apply, log what would be applied without actually pulling/recreating containers")
 	healthTimeout := fs.Duration("health-timeout", 60*time.Second, "how long to wait for the recreated container to become healthy before rolling back")
 	all := fs.Bool("all", false, "include stopped containers in scans")
 	skipNotes := fs.Bool("no-fetch-notes", false, "skip GitHub release-notes fetch during scans")
@@ -228,15 +229,17 @@ Flags:`)
 			Concurrency: *concurrency,
 		}
 		cycle, err := runScanCycle(ctx, scanCycleConfig{
-			Scanner:    scn,
-			Dispatcher: dispatcher,
-			Store:      st,
-			DedupTTL:   *dedupTTL,
-			Updater:    upd,
-			Apply:      *apply,
-			Now:        deps.Now,
-			Logger:     logger,
-			All:        *all,
+			Scanner:            scn,
+			Dispatcher:         dispatcher,
+			Store:              st,
+			DedupTTL:           *dedupTTL,
+			Updater:            upd,
+			Apply:              *apply,
+			DryRun:             *dryRun,
+			MaintenanceWindows: parseMaintenanceWindows(loaded, logger),
+			Now:                deps.Now,
+			Logger:             logger,
+			All:                *all,
 		})
 		if err != nil {
 			return err
@@ -273,7 +276,12 @@ Flags:`)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
-	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
+	state := &api.StateHandler{
+		Store:       st,
+		Logger:      logger,
+		Auth:        auth,
+		TriggerScan: scanJob, // POST /api/v1/scans queue-jumps the next periodic firing
+	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 
 	// --- Set up parent context (signals or injected) --------------------

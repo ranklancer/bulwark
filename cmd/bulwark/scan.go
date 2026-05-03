@@ -70,6 +70,7 @@ Flags:`)
 	noColor := fs.Bool("no-color", false, "disable ANSI colour codes in text output")
 	notify := fs.Bool("notify", false, "after scanning, dispatch notifications to channels enabled in config")
 	apply := fs.Bool("apply", false, "auto-apply qualifying updates: SAFE always, plus REVIEW updates that have been approved via `bulwark queue approve`. BREAKING never auto-applies.")
+	dryRun := fs.Bool("dry-run", false, "with --apply, log what would be applied without actually pulling/recreating containers")
 	healthTimeout := fs.Duration("health-timeout", 60*time.Second, "how long to wait for the recreated container to become healthy before rolling back")
 	dataDir := fs.String("data-dir", os.Getenv("BULWARK_DATA_DIR"), "directory for persistent state (notification dedup, scan history)")
 	dedupTTL := fs.Duration("dedup-ttl", 24*time.Hour, "minimum interval between repeat notifications for the same (container, digest) pair")
@@ -190,17 +191,19 @@ Flags:`)
 		}
 	}
 
-	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil, "apply", *apply)
+	logger.Info("starting scan", "all", *all, "concurrency", *concurrency, "store", st != nil, "apply", *apply, "dry_run", *dryRun)
 	cycle, err := runScanCycle(context.Background(), scanCycleConfig{
-		Scanner:    scn,
-		Dispatcher: dispatcher,
-		Store:      st,
-		DedupTTL:   *dedupTTL,
-		Updater:    upd,
-		Apply:      *apply,
-		Now:        now,
-		Logger:     logger,
-		All:        *all,
+		Scanner:            scn,
+		Dispatcher:         dispatcher,
+		Store:              st,
+		DedupTTL:           *dedupTTL,
+		Updater:            upd,
+		Apply:              *apply,
+		DryRun:             *dryRun,
+		MaintenanceWindows: parseMaintenanceWindows(loaded, logger),
+		Now:                now,
+		Logger:             logger,
+		All:                *all,
 	})
 	if err != nil {
 		return err
