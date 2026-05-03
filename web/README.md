@@ -1,0 +1,36 @@
+# Bulwark dashboard (web/)
+
+Vite + React + TypeScript + Tailwind. The build artifact lives at
+`../internal/api/ui-react/dist/` so the Go server picks it up via
+`go:embed` — there's no separate "deploy the static files" step.
+
+## Develop
+
+```sh
+cd web
+npm install
+npm run dev      # Vite dev server at http://localhost:5173
+                 # /api/* requests are proxied to http://localhost:8080
+```
+
+In a second terminal, run `bulwark serve` (or `bulwark run`) on :8080
+so the proxy has something to talk to.
+
+## Build for embedding
+
+```sh
+cd web
+npm ci           # use lockfile in CI; npm install during dev
+npm run build    # emits ../internal/api/ui-react/dist/{index.html, assets/*}
+```
+
+Then `go build ./...` in the repo root picks up the freshly-built
+artifact. CI runs both steps in `.github/workflows/ci.yml`.
+
+## Why a placeholder dist?
+
+`go:embed` fails the build when the embedded directory is missing. The
+committed `internal/api/ui-react/dist/index.html` placeholder lets
+`go build` succeed for operators without a Node toolchain — they get
+the legacy vanilla dashboard at `/`. After `npm run build` the React
+SPA mounts at `/` and the legacy dashboard moves to `/legacy/`.

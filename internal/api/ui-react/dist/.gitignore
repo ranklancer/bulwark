@@ -1,0 +1,7 @@
+# Vite build emits hashed-asset bundles into this directory. We commit
+# only the placeholder index.html (one level up) so `go build` succeeds
+# without npm; the real bundle is built per-release in CI.
+assets/
+*.svg
+*.png
+*.ico

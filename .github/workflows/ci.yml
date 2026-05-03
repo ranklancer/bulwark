@@ -21,8 +21,20 @@ jobs:
           go-version: "1.22"
           cache: true
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
       - name: Verify modules
         run: go mod verify
+
+      - name: Build web/ (Vite + React + Tailwind)
+        run: |
+          cd web
+          npm ci
+          npm run build
 
       - name: Vet
         run: go vet ./...
