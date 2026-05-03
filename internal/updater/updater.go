@@ -256,7 +256,13 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 	}
 
 	// --- 7. Health verification --------------------------------------------
-	healthy, finalStatus, healthErr := u.waitForHealthy(ctx, newID)
+	// Honour the container's own Docker HEALTHCHECK start_period when one
+	// is defined: services that take 60s to come up shouldn't be rolled
+	// back because Bulwark's 5s daemon default fired too early. The
+	// per-container value is read from the inspect we already did in
+	// step 2, so there's no extra Docker round-trip.
+	graceOverride, _ := insp.HealthcheckStartPeriod()
+	healthy, finalStatus, healthErr := u.waitForHealthy(ctx, newID, graceOverride)
 	res.HealthStatus = finalStatus
 	if !healthy {
 		_ = u.rollbackPreserved(ctx, insp.ID, originalName, preservedName, newID, res.SnapshotID, hctx, opts.RollbackHook, hookRunner, logger)
@@ -377,7 +383,7 @@ func (u *Updater) rollbackPreserved(ctx context.Context, oldID, originalName, pr
 // require only that the container be Running after the StartupGrace
 // period elapses. This is weaker than a real health check but matches
 // what most homelab containers actually configure.
-func (u *Updater) waitForHealthy(ctx context.Context, id string) (bool, docker.HealthStatus, error) {
+func (u *Updater) waitForHealthy(ctx context.Context, id string, graceOverride time.Duration) (bool, docker.HealthStatus, error) {
 	now := u.Now
 	if now == nil {
 		now = time.Now
@@ -393,6 +399,20 @@ func (u *Updater) waitForHealthy(ctx context.Context, id string) (bool, docker.H
 	grace := u.StartupGrace
 	if grace <= 0 {
 		grace = 5 * time.Second
+	}
+	// Per-container HEALTHCHECK start_period takes precedence over the
+	// daemon-wide default. We don't clamp downward — a user who set
+	// start_period=120s in their compose file knows their service.
+	if graceOverride > 0 {
+		grace = graceOverride
+		// The ceiling on patience is the overall HealthTimeout. If the
+		// declared start_period is longer than the configured timeout,
+		// stretch the timeout to at least cover the start_period plus
+		// one polling interval — otherwise we'd guarantee a rollback for
+		// any container with a long startup probe.
+		if minTimeout := graceOverride + interval; timeout < minTimeout {
+			timeout = minTimeout
+		}
 	}
 
 	deadline := now().Add(timeout)

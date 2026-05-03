@@ -88,6 +88,32 @@ func (c *ContainerInspect) NameWithoutSlash() string {
 	return strings.TrimPrefix(c.Name, "/")
 }
 
+// HealthcheckStartPeriod returns the StartPeriod field of the
+// container's Healthcheck config, when one is defined. The value is
+// parsed straight out of the Config raw JSON Bulwark already keeps
+// around for re-creation; we don't need a second inspect call.
+//
+// Returns (0, false) when there's no Healthcheck, no StartPeriod, or
+// the JSON is malformed. Bulwark's caller treats false as "no
+// override" — fall through to the daemon-wide StartupGrace default.
+func (c *ContainerInspect) HealthcheckStartPeriod() (time.Duration, bool) {
+	if c == nil || len(c.Config) == 0 {
+		return 0, false
+	}
+	var cfg struct {
+		Healthcheck *struct {
+			StartPeriod time.Duration `json:"StartPeriod"`
+		} `json:"Healthcheck"`
+	}
+	if err := json.Unmarshal(c.Config, &cfg); err != nil {
+		return 0, false
+	}
+	if cfg.Healthcheck == nil || cfg.Healthcheck.StartPeriod <= 0 {
+		return 0, false
+	}
+	return cfg.Healthcheck.StartPeriod, true
+}
+
 // DigestFor returns the registry-side digest from RepoDigests for the given
 // repository, if present. Docker records each pull as
 // "<repository>@sha256:<hex>" — so when the user pulled

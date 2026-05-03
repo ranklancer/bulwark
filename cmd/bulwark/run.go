@@ -317,11 +317,26 @@ Flags:`)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
+	// Sessions are enabled whenever the inner authenticator is anything
+	// stronger than AnonymousAuth — there's nothing to protect on a
+	// fully-anonymous deployment, and minting cookies in that case would
+	// only confuse operators.
+	var sessions *api.SessionScheme
+	wrappedAuth := auth
+	if _, anon := auth.(api.AnonymousAuth); !anon {
+		sessions, err = api.NewSessionScheme(0)
+		if err != nil {
+			return fmt.Errorf("run: sessions: %w", err)
+		}
+		wrappedAuth = api.CookieOrInnerAuth{Inner: auth, Sessions: sessions}
+	}
 	state := &api.StateHandler{
-		Store:       st,
-		Logger:      logger,
-		Auth:        auth,
-		TriggerScan: scanJob, // POST /api/v1/scans queue-jumps the next periodic firing
+		Store:            st,
+		Logger:           logger,
+		Auth:             wrappedAuth,
+		Sessions:         sessions,
+		SessionInnerAuth: auth, // bare; cookie can't renew itself
+		TriggerScan:      scanJob, // POST /api/v1/scans queue-jumps the next periodic firing
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 

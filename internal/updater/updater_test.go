@@ -717,7 +717,7 @@ func TestWaitForHealthy_TimesOutWhenStuckStarting(t *testing.T) {
 		HealthInterval: 1 * time.Millisecond,
 		HealthTimeout:  20 * time.Millisecond,
 	}
-	healthy, status, err := u.waitForHealthy(context.Background(), "x")
+	healthy, status, err := u.waitForHealthy(context.Background(), "x", 0)
 	if healthy {
 		t.Error("should not be healthy")
 	}
@@ -726,6 +726,44 @@ func TestWaitForHealthy_TimesOutWhenStuckStarting(t *testing.T) {
 	}
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("err = %v, want timeout", err)
+	}
+}
+
+// TestWaitForHealthy_StartPeriodOverrideExtendsTimeout verifies the
+// Phase-15a contract: a per-container HEALTHCHECK start_period that
+// exceeds the daemon's HealthTimeout pushes the timeout out enough to
+// cover it. Without this, services with long startup probes (databases,
+// app servers warming caches) would always be rolled back.
+func TestWaitForHealthy_StartPeriodOverrideExtendsTimeout(t *testing.T) {
+	calls := 0
+	fd := &fakeDocker{
+		containers: map[string]*docker.ContainerInspect{
+			"x": {ID: "x", Running: true},
+		},
+		healthTimeline: func(_ int) docker.HealthStatus {
+			calls++
+			// First few inspections: Starting. Then Healthy.
+			if calls < 4 {
+				return docker.HealthStarting
+			}
+			return docker.HealthHealthy
+		},
+	}
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  3 * time.Millisecond, // less than 4 polls × 1ms
+	}
+	// Override of 50ms = much longer than the configured timeout. The
+	// new behaviour stretches the timeout; the container becomes
+	// healthy on poll 4 (~4ms elapsed), so we should succeed.
+	healthy, status, err := u.waitForHealthy(context.Background(), "x", 50*time.Millisecond)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if !healthy {
+		t.Errorf("expected healthy after override-extended timeout; status=%v", status)
 	}
 }
 
@@ -746,7 +784,7 @@ func TestWaitForHealthy_RespectsContextCancel(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		cancel()
 	}()
-	_, _, err := u.waitForHealthy(ctx, "x")
+	_, _, err := u.waitForHealthy(ctx, "x", 0)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}

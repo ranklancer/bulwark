@@ -42,6 +42,16 @@ type StateHandler struct {
 	// invokes, so a POST /api/v1/scans queue-jumps the next periodic
 	// firing. nil omits the route.
 	TriggerScan func(ctx context.Context) error
+
+	// Sessions, when non-nil, enables HTTP-only session cookie auth so
+	// the dashboard can authenticate without a token-in-localStorage
+	// XSS vector. Auth is expected to be wrapped in CookieOrInnerAuth
+	// pointing at the same SessionScheme so cookies actually satisfy
+	// the wider middleware. The SessionInnerAuth field is the bare
+	// inner Authenticator used by POST /api/v1/sessions to validate
+	// the bootstrap credential before issuing a cookie.
+	Sessions         *SessionScheme
+	SessionInnerAuth Authenticator
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
@@ -64,6 +74,15 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/queue/{container}", h.authed(h.csrfProtect(h.forgetDecision)))
 	mux.HandleFunc("GET /api/v1/notifications", h.authed(h.listNotifications))
 	mux.HandleFunc("DELETE /api/v1/notifications", h.authed(h.csrfProtect(h.clearNotifications)))
+	if h.Sessions != nil {
+		// POST uses the *bare* inner Authenticator (typically Bearer)
+		// so a cookie can't refresh itself indefinitely — only the
+		// holder of the bootstrap credential gets a fresh session.
+		// DELETE is open: even an expired cookie can request its own
+		// deletion (logout button keeps working past TTL).
+		mux.HandleFunc("POST /api/v1/sessions", h.csrfProtect(h.postSession))
+		mux.HandleFunc("DELETE /api/v1/sessions", h.csrfProtect(h.deleteSession))
+	}
 }
 
 // csrfProtect wraps a handler with CSRF defense, using the configured
@@ -380,4 +399,53 @@ func buildAPIQueueRows(st *store.Store) ([]queueRow, error) {
 
 func errEnvelope(err error) map[string]any {
 	return map[string]any{"error": err.Error()}
+}
+
+// --- /api/v1/sessions --------------------------------------------------------
+
+// postSession validates the bootstrap credential (typically Bearer)
+// and issues a fresh session cookie. Bearer tokens still work as
+// always — issuing a cookie is purely additive and exists so the
+// dashboard can authenticate without putting the token in localStorage
+// (an XSS would otherwise leak it).
+func (h *StateHandler) postSession(w http.ResponseWriter, r *http.Request) {
+	if h.Sessions == nil {
+		writeJSON(w, http.StatusNotFound, errEnvelope(ErrSessionsDisabled))
+		return
+	}
+	inner := h.SessionInnerAuth
+	if inner == nil {
+		// Defensive: without an inner authenticator anyone can mint a
+		// cookie. Refuse rather than degrade.
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(errors.New("api: session login has no inner authenticator")))
+		return
+	}
+	if _, err := inner.Authenticate(r); err != nil {
+		var ae *AuthError
+		if errors.As(err, &ae) {
+			writeJSON(w, ae.Status, errEnvelope(err))
+			return
+		}
+		writeJSON(w, http.StatusUnauthorized, errEnvelope(err))
+		return
+	}
+	value, exp := h.Sessions.Issue()
+	http.SetCookie(w, h.Sessions.BuildCookie(value, exp, r.TLS != nil))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"expires_at": exp.UTC().Format(time.RFC3339),
+		"ttl_seconds": int(time.Until(exp).Seconds()),
+	})
+}
+
+// deleteSession clears the session cookie. Authenticated callers and
+// callers presenting an expired cookie alike succeed — logout buttons
+// must keep working when the session has timed out so the user can
+// re-authenticate cleanly.
+func (h *StateHandler) deleteSession(w http.ResponseWriter, _ *http.Request) {
+	if h.Sessions == nil {
+		writeJSON(w, http.StatusNotFound, errEnvelope(ErrSessionsDisabled))
+		return
+	}
+	http.SetCookie(w, ClearCookie())
+	w.WriteHeader(http.StatusNoContent)
 }

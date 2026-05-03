@@ -172,7 +172,22 @@ Flags:`)
 	if err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
-	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
+	var sessions *api.SessionScheme
+	wrappedAuth := auth
+	if _, anon := auth.(api.AnonymousAuth); !anon {
+		sessions, err = api.NewSessionScheme(0)
+		if err != nil {
+			return fmt.Errorf("serve: sessions: %w", err)
+		}
+		wrappedAuth = api.CookieOrInnerAuth{Inner: auth, Sessions: sessions}
+	}
+	state := &api.StateHandler{
+		Store:            st,
+		Logger:           logger,
+		Auth:             wrappedAuth,
+		Sessions:         sessions,
+		SessionInnerAuth: auth,
+	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 
 	// Production: translate SIGINT/SIGTERM into context cancellation.
