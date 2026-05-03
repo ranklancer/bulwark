@@ -9,6 +9,27 @@ substitute your real hostname in your *own* untracked files.
 > [PII rule](../CONTRIBUTING.md)). Keep your real values out of any file
 > tracked in version control.
 
+> ### ⚠ Docker socket = root on the host
+>
+> Bulwark reads (and, with `--apply`, writes) `/var/run/docker.sock`.
+> Anyone who can reach Bulwark's `--apply` path effectively has root on
+> the host: they can recreate any container with any image. Treat the
+> Bulwark listener accordingly:
+>
+> - Bind to `127.0.0.1` and put a TLS-terminating reverse proxy in front,
+>   OR bind to a private LAN address that no untrusted network can reach.
+> - Configure `api.auth.type: forward-proxy` (Authelia/Authentik) or at
+>   minimum `bearer` with a strong shared secret.
+> - Enable the per-IP rate limiter (on by default; see
+>   `api.rate_limit_per_minute`) so a leaked bearer can't be used to
+>   hammer the daemon.
+> - Run Bulwark with `cap_drop: ALL` and `no-new-privileges:true` so a
+>   process compromise doesn't escape its own container.
+>
+> The same property is true of every other Docker-update tool — it's
+> fundamental to the role, not specific to Bulwark — but worth saying
+> out loud.
+
 ---
 
 ## Topology
@@ -341,6 +362,60 @@ classification + notification pipeline as the periodic scan.
 > SSO for the dashboard, exempt the `/api/v1/webhooks/diun` path from
 > the forward-auth middleware so DIUN's POSTs don't get redirected to
 > a login page.
+
+### Hardening DIUN with HMAC replay protection
+
+If the DIUN webhook traverses a network where bearer tokens could be
+captured and replayed (lossy WiFi, shared LANs, anywhere without TLS),
+add HMAC-SHA256 signatures on top of the bearer. Bulwark accepts a
+`X-Bulwark-Timestamp` + `X-Bulwark-Signature` pair signing the body,
+gated on `api.diun.hmac_secret`:
+
+```yaml
+# bulwark.yaml
+api:
+  diun:
+    token:       "${BULWARK_DIUN_TOKEN}"
+    hmac_secret: "${BULWARK_DIUN_HMAC_SECRET}"   # 32+ random bytes
+```
+
+DIUN itself can't compute an HMAC over the body. Bulwark ships a tiny
+sidecar — `cmd/bulwark-diun-relay` — that DIUN posts to in cleartext;
+the relay signs and forwards to Bulwark. Single binary, stdlib only.
+
+```yaml
+# docker-compose snippet — add alongside Bulwark
+services:
+  bulwark-diun-relay:
+    image: ghcr.io/bulwark-docker/bulwark-diun-relay:latest
+    container_name: bulwark-diun-relay
+    restart: unless-stopped
+    command:
+      - --listen=:8090
+      - --upstream=http://bulwark:8080/api/v1/webhooks/diun
+      - --secret-file=/run/secrets/bulwark_diun_hmac_secret
+      - --bearer=${BULWARK_DIUN_TOKEN}        # forwarded as Authorization
+    secrets:
+      - bulwark_diun_hmac_secret
+    networks:
+      - proxy
+secrets:
+  bulwark_diun_hmac_secret:
+    file: ./secrets/bulwark_diun_hmac_secret   # 32+ random bytes; chmod 600
+```
+
+DIUN points at the relay (NOT directly at Bulwark):
+
+```yaml
+notif:
+  webhook:
+    endpoint: http://bulwark-diun-relay:8090/
+    method: POST
+```
+
+The relay sees the body in cleartext on the loopback Docker network, signs
+it, and forwards to Bulwark over the same network. The replay window
+is 5 minutes — captured webhooks past that fail signature verification.
 
 ---
 

@@ -37,7 +37,12 @@ type Server struct {
 //	GET  /healthz                  liveness probe
 //	GET  /readyz                   readiness probe
 //	{state endpoints}              when StateHandler is non-nil — see StateHandler.Register
-func NewServer(addr string, diun *DIUNHandler, state *StateHandler, logger *slog.Logger) *Server {
+//
+// limiter, when non-nil, wraps every request — including the dashboard,
+// the API, and the DIUN webhook. nil disables rate limiting. The /healthz
+// and /readyz probes are NOT exempt by design — a flooding load balancer
+// is exactly the kind of thing the limiter exists to bound.
+func NewServer(addr string, diun *DIUNHandler, state *StateHandler, limiter *RateLimiter, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -56,10 +61,15 @@ func NewServer(addr string, diun *DIUNHandler, state *StateHandler, logger *slog
 	// purely a client-side renderer over /api/v1/* — no extra surface.
 	mountUI(mux, logger)
 
+	var rootHandler http.Handler = mux
+	if limiter != nil {
+		rootHandler = limiter.Middleware(rootHandler)
+	}
+
 	return &Server{
 		HTTPServer: &http.Server{
 			Addr:              addr,
-			Handler:           withLogging(mux, logger),
+			Handler:           withLogging(rootHandler, logger),
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
 			WriteTimeout:      60 * time.Second,

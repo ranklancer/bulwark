@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -193,13 +194,30 @@ func (s *Store) ListScans(limit int) ([]ScanRecord, error) {
 	return out, nil
 }
 
+// validScanID matches the alphabet of IDs the store actually produces:
+// digits, letters, dots (RFC3339-style timestamps), dashes, underscores.
+// Anything else is a sign of misuse — including the path-traversal payload
+// "../etc/passwd" — and is rejected at this boundary so no caller can
+// bypass the check by passing through the wrong layer.
+var validScanID = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// ErrInvalidScanID is returned by GetScan when the supplied id contains
+// characters that would let it escape the history directory (slashes,
+// dot-dot segments, NUL bytes, etc.). Distinct from ErrNotFound so
+// callers can map it to a 400 instead of a 404.
+var ErrInvalidScanID = errors.New("store: scan id contains invalid characters")
+
 // GetScan returns the full record with the given ID, or ErrNotFound.
+// Returns ErrInvalidScanID when the id is malformed.
 func (s *Store) GetScan(id string) (*ScanRecord, error) {
 	if s == nil {
 		return nil, ErrNotFound
 	}
 	if id == "" {
 		return nil, errors.New("store: scan ID is required")
+	}
+	if !validScanID.MatchString(id) {
+		return nil, ErrInvalidScanID
 	}
 	rec, err := s.readHistory(historyFilePrefix + id + historyFileSuffix)
 	if err != nil {

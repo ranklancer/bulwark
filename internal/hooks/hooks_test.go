@@ -130,6 +130,78 @@ exit 0
 	}
 }
 
+func TestExecRunner_HooksRoot_RejectsOutside(t *testing.T) {
+	dir := t.TempDir()
+	hookInRoot := filepath.Join(dir, "ok.sh")
+	if err := os.WriteFile(hookInRoot, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Hook OUTSIDE the root.
+	outsideDir := t.TempDir()
+	hookOutside := filepath.Join(outsideDir, "evil.sh")
+	if err := os.WriteFile(hookOutside, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := ExecRunner{HooksRoot: dir}
+
+	// In-root hook must succeed.
+	if _, err := r.Run(context.Background(), hookInRoot, Context{Action: ActionPreUpdate}, 5*time.Second); err != nil {
+		t.Errorf("in-root hook rejected: %v", err)
+	}
+	// Out-of-root hook must be rejected with the typed error.
+	_, err := r.Run(context.Background(), hookOutside, Context{Action: ActionPreUpdate}, 5*time.Second)
+	if !errors.Is(err, ErrHookOutsideRoot) {
+		t.Errorf("out-of-root hook returned %v, want ErrHookOutsideRoot", err)
+	}
+}
+
+func TestExecRunner_HooksRoot_RejectsTraversalPath(t *testing.T) {
+	dir := t.TempDir()
+	r := ExecRunner{HooksRoot: dir}
+	// "/etc/passwd" is plainly outside any tempdir root.
+	_, err := r.Run(context.Background(), "/etc/passwd", Context{}, time.Second)
+	if !errors.Is(err, ErrHookOutsideRoot) {
+		t.Errorf("path traversal returned %v, want ErrHookOutsideRoot", err)
+	}
+	// dot-dot from inside the root.
+	_, err = r.Run(context.Background(), filepath.Join(dir, "../../etc/passwd"), Context{}, time.Second)
+	if !errors.Is(err, ErrHookOutsideRoot) {
+		t.Errorf("dot-dot escape returned %v, want ErrHookOutsideRoot", err)
+	}
+}
+
+func TestExecRunner_HooksRoot_RejectsSymlinkEscape(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	if err := os.WriteFile(filepath.Join(target, "real.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Symlink inside root that points OUTSIDE.
+	link := filepath.Join(root, "link.sh")
+	if err := os.Symlink(filepath.Join(target, "real.sh"), link); err != nil {
+		t.Skipf("symlinks unavailable on this filesystem: %v", err)
+	}
+	r := ExecRunner{HooksRoot: root}
+	_, err := r.Run(context.Background(), link, Context{}, time.Second)
+	if !errors.Is(err, ErrHookOutsideRoot) {
+		t.Errorf("symlink escape returned %v, want ErrHookOutsideRoot", err)
+	}
+}
+
+func TestExecRunner_NoHooksRoot_LegacyBehaviour(t *testing.T) {
+	dir := t.TempDir()
+	hook := filepath.Join(dir, "ok.sh")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Empty HooksRoot should accept any executable path.
+	r := ExecRunner{}
+	if _, err := r.Run(context.Background(), hook, Context{}, time.Second); err != nil {
+		t.Errorf("legacy hook rejected: %v", err)
+	}
+}
+
 func TestExecRunner_DoesNotInheritDaemonEnv(t *testing.T) {
 	t.Setenv("BULWARK_SLACK_WEBHOOK", "https://hooks.example.com/secret-from-daemon")
 	dir := t.TempDir()

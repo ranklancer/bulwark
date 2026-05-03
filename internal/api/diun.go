@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -51,6 +52,14 @@ type DIUNHandler struct {
 	// supply it via either an `Authorization: Bearer <token>` header or a
 	// custom `X-Bulwark-Token` header. Empty means anonymous access.
 	Token string
+
+	// HMAC, when configured with a non-empty secret, additionally requires
+	// every request to carry an X-Bulwark-Timestamp + X-Bulwark-Signature
+	// pair that authenticates the request body and a freshness window.
+	// DIUN can't natively sign, but the bulwark-diun-relay sidecar
+	// (cmd/bulwark-diun-relay) does — point DIUN at the relay and the
+	// relay at this endpoint.
+	HMAC *HMACScheme
 
 	// DedupTTL is the silencing window applied when Store is populated.
 	// Zero disables dedup; negative is treated as zero.
@@ -118,11 +127,34 @@ func (h *DIUNHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Read the body in full BEFORE JSON-decode so HMAC verification (which
+	// signs the raw bytes) can run on the same buffer the decoder will see.
+	limited := http.MaxBytesReader(w, r.Body, maxDIUNBodyBytes)
+	defer limited.Close()
+	rawBody, err := io.ReadAll(limited)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, diunResponse{
+			Received: false,
+			Note:     "could not read request body: " + err.Error(),
+		})
+		return
+	}
+
+	if h.HMAC.Enabled() {
+		ts := r.Header.Get("X-Bulwark-Timestamp")
+		sig := r.Header.Get("X-Bulwark-Signature")
+		if err := h.HMAC.Verify(ts, sig, rawBody); err != nil {
+			// Don't echo the parse-error detail in the response — that
+			// just helps an attacker probe which check failed. The
+			// daemon log gets the full reason via the middleware.
+			logger.Warn("diun: hmac verification failed", "err", err)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+
 	var payload diunPayload
-	body := http.MaxBytesReader(w, r.Body, maxDIUNBodyBytes)
-	defer body.Close()
-	dec := json.NewDecoder(body)
-	if err := dec.Decode(&payload); err != nil {
+	if err := json.Unmarshal(rawBody, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, diunResponse{
 			Received: false,
 			Note:     "could not decode JSON body: " + err.Error(),

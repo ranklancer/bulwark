@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,6 +285,42 @@ func TestGetScan_NotFound(t *testing.T) {
 	_, err := s.GetScan("nonexistent")
 	if err == nil {
 		t.Fatal("expected ErrNotFound")
+	}
+}
+
+func TestGetScan_RejectsPathTraversal(t *testing.T) {
+	s := openTestStore(t)
+	cases := []string{
+		"../etc/passwd",
+		"../../etc/passwd",
+		"foo/bar",
+		"foo\\bar",
+		"foo\x00",
+		"a/../../b",
+		"/etc/passwd",
+		"   ",
+		"a b",
+	}
+	for _, id := range cases {
+		t.Run(id, func(t *testing.T) {
+			_, err := s.GetScan(id)
+			if !errors.Is(err, ErrInvalidScanID) {
+				t.Errorf("GetScan(%q) returned %v, want ErrInvalidScanID", id, err)
+			}
+		})
+	}
+}
+
+func TestGetScan_AcceptsLegitimateIDs(t *testing.T) {
+	// IDs the store itself produces must round-trip cleanly. Same alphabet
+	// as RecordScan's derived filename: digits, dots, dashes.
+	s := openTestStore(t)
+	rec, err := s.RecordScan(ScanRecord{StartedAt: time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetScan(rec.ID); err != nil {
+		t.Errorf("legitimate id %q rejected: %v", rec.ID, err)
 	}
 }
 

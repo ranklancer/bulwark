@@ -16,6 +16,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/config"
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
@@ -178,6 +179,7 @@ Flags:`)
 			upd = &updater.Updater{
 				Docker:        dc,
 				Snapshots:     snapBackend,
+				Hooks:         hooks.ExecRunner{HooksRoot: hooksRoot(loaded)},
 				Logger:        logger,
 				HealthTimeout: *healthTimeout,
 			}

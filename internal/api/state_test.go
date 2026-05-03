@@ -123,6 +123,20 @@ func TestGetScan_Unknown_404(t *testing.T) {
 	}
 }
 
+func TestGetScan_PathTraversalReturns400(t *testing.T) {
+	st := stateFixture(t)
+	srv := newStateServer(t, &StateHandler{Store: st})
+	// %2F = /, %5C = \. Even percent-decoded the id contains forbidden chars.
+	resp, err := http.Get(srv.URL + "/api/v1/scans/..%2F..%2Fetc%2Fpasswd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (invalid id, not 404)", resp.StatusCode)
+	}
+}
+
 // --- /queue ----------------------------------------------------------------
 
 func TestListQueue_ReflectsApproval(t *testing.T) {

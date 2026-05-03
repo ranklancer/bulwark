@@ -9,6 +9,26 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/config"
 )
 
+// hooksRoot pulls the configured Hooks.HooksRoot from the loaded YAML, or
+// returns "" when no config was supplied. Centralised here so scan.go and
+// run.go don't drift apart.
+func hooksRoot(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Hooks.HooksRoot
+}
+
+// buildDIUNHMAC returns a configured *api.HMACScheme when api.diun.hmac_secret
+// is set, or nil to leave the DIUN handler in bearer-only mode. Centralised
+// so serve.go and run.go can't accidentally diverge.
+func buildDIUNHMAC(cfg *config.Config) *api.HMACScheme {
+	if cfg == nil || cfg.API.DIUN.HMACSecret == "" {
+		return nil
+	}
+	return api.NewHMACScheme([]byte(cfg.API.DIUN.HMACSecret))
+}
+
 // buildAuthenticator translates the loaded YAML auth block into a concrete
 // api.Authenticator. The resolution order — and the reasons for it:
 //

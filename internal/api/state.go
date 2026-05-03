@@ -22,15 +22,27 @@ import (
 // proxy that terminates SSO/MFA upstream — Authelia, Authentik, etc.).
 // Nil Auth defaults to AnonymousAuth so existing tests / minimal
 // deployments still work.
+//
+// CSRF is enforced on POST/DELETE/PUT/PATCH endpoints — the stance is
+// "Sec-Fetch-Site=same-origin or recognized Origin", with Origin-less
+// requests passing through (so curl + scripts continue to work). Browser
+// cross-origin posts are rejected before they reach the handler.
 type StateHandler struct {
 	Store  *store.Store
 	Logger *slog.Logger
 	Auth   Authenticator
+
+	// CSRF configures the cross-site-request-forgery defense applied to
+	// mutating endpoints. Nil uses DefaultCSRFConfig.
+	CSRF *CSRFConfig
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
 // method+path patterns. They are mounted only when Store is non-nil — a
 // daemon running without --data-dir naturally has nothing to expose.
+//
+// Mutating endpoints (POST/DELETE) are wrapped with the CSRF middleware;
+// read endpoints are not.
 func (h *StateHandler) Register(mux *http.ServeMux) {
 	if h == nil || h.Store == nil {
 		return
@@ -38,10 +50,20 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/scans", h.authed(h.listScans))
 	mux.HandleFunc("GET /api/v1/scans/{id}", h.authed(h.getScan))
 	mux.HandleFunc("GET /api/v1/queue", h.authed(h.listQueue))
-	mux.HandleFunc("POST /api/v1/queue", h.authed(h.postDecision))
-	mux.HandleFunc("DELETE /api/v1/queue/{container}", h.authed(h.forgetDecision))
+	mux.HandleFunc("POST /api/v1/queue", h.authed(h.csrfProtect(h.postDecision)))
+	mux.HandleFunc("DELETE /api/v1/queue/{container}", h.authed(h.csrfProtect(h.forgetDecision)))
 	mux.HandleFunc("GET /api/v1/notifications", h.authed(h.listNotifications))
-	mux.HandleFunc("DELETE /api/v1/notifications", h.authed(h.clearNotifications))
+	mux.HandleFunc("DELETE /api/v1/notifications", h.authed(h.csrfProtect(h.clearNotifications)))
+}
+
+// csrfProtect wraps a handler with CSRF defense, using the configured
+// CSRFConfig (or the default when nil).
+func (h *StateHandler) csrfProtect(next http.HandlerFunc) http.HandlerFunc {
+	cfg := DefaultCSRFConfig()
+	if h.CSRF != nil {
+		cfg = *h.CSRF
+	}
+	return csrfMiddlewareFunc(cfg, nil, next)
 }
 
 // authed wraps a HandlerFunc with the configured Authenticator. Nil Auth
@@ -88,6 +110,10 @@ func (h *StateHandler) getScan(w http.ResponseWriter, r *http.Request) {
 	}
 	rec, err := h.Store.GetScan(id)
 	if err != nil {
+		if errors.Is(err, store.ErrInvalidScanID) {
+			writeJSON(w, http.StatusBadRequest, errEnvelope(err))
+			return
+		}
 		if errors.Is(err, store.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, errEnvelope(err))
 			return

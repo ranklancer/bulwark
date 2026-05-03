@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -74,7 +75,24 @@ type Runner interface {
 // ExecRunner is the production implementation. The hook's working directory
 // is set to the directory containing the script (so scripts that source
 // adjacent helpers work as expected).
-type ExecRunner struct{}
+//
+// HooksRoot, when non-empty, is the only directory tree from which scripts
+// will be executed. Any hook path outside (or escaping via symlink) is
+// rejected with ErrHookOutsideRoot. This is the defense against a
+// compromised compose file injecting a malicious path via the
+// `bulwark.hook.*` labels — the operator decides up-front "hooks live in
+// /etc/bulwark/hooks" and label-supplied paths can't escape it.
+//
+// Empty HooksRoot keeps current behavior (any path the daemon process can
+// execute) for backwards compatibility.
+type ExecRunner struct {
+	HooksRoot string
+}
+
+// ErrHookOutsideRoot is returned when a hook path doesn't live inside the
+// configured HooksRoot (or escapes via symlinks). Distinct from a generic
+// exec failure so callers can log it as a misconfiguration, not a hook bug.
+var ErrHookOutsideRoot = errors.New("hooks: path is outside the configured hooks_root")
 
 // MaxHookOutput is the upper bound on captured stdout+stderr per hook.
 // A misbehaving hook that prints megabytes shouldn't be able to OOM the
@@ -83,9 +101,14 @@ const MaxHookOutput = 256 * 1024
 
 // Run implements Runner. The default timeout is 60 seconds; pass 0 for the
 // default or a negative value to disable.
-func (ExecRunner) Run(ctx context.Context, path string, hctx Context, timeout time.Duration) ([]byte, error) {
+func (e ExecRunner) Run(ctx context.Context, path string, hctx Context, timeout time.Duration) ([]byte, error) {
 	if path == "" {
 		return nil, errors.New("hooks: empty path")
+	}
+	if e.HooksRoot != "" {
+		if err := pathInRoot(path, e.HooksRoot); err != nil {
+			return nil, err
+		}
 	}
 	if timeout == 0 {
 		timeout = 60 * time.Second
@@ -122,6 +145,44 @@ func (ExecRunner) Run(ctx context.Context, path string, hctx Context, timeout ti
 // Currently just PATH so /bin/sh shebangs work; extend with discretion.
 func safeBaseEnv() []string {
 	return []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+}
+
+// pathInRoot enforces that hookPath, after symlink resolution, lives
+// inside root. Both sides are resolved via filepath.EvalSymlinks so a
+// hookPath that's itself a symlink, or that points through a symlinked
+// directory, can't escape. Returns ErrHookOutsideRoot when the
+// containment check fails.
+func pathInRoot(hookPath, root string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("hooks: resolve hooks_root: %w", err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(absRoot)
+	if err != nil {
+		return fmt.Errorf("hooks: hooks_root %s does not exist or is not accessible: %w", root, err)
+	}
+
+	absHook, err := filepath.Abs(hookPath)
+	if err != nil {
+		return fmt.Errorf("hooks: resolve hook path: %w", err)
+	}
+	resolvedHook, err := filepath.EvalSymlinks(absHook)
+	if err != nil {
+		// Hook script doesn't exist (or unreadable). Fall back to the
+		// pre-symlink absolute path for the containment check, then let
+		// the os/exec call surface the missing-file error in its own
+		// idiom — separation of concerns.
+		resolvedHook = absHook
+	}
+
+	rel, err := filepath.Rel(resolvedRoot, resolvedHook)
+	if err != nil {
+		return ErrHookOutsideRoot
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("%w: %s", ErrHookOutsideRoot, hookPath)
+	}
+	return nil
 }
 
 // FakeRunner is the test double. It records every call and returns

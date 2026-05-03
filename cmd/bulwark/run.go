@@ -17,6 +17,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/config"
 	"github.com/bulwark-docker/bulwark/internal/docker"
+	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
@@ -203,6 +204,7 @@ Flags:`)
 			upd = &updater.Updater{
 				Docker:        dc,
 				Snapshots:     snapBackend,
+				Hooks:         hooks.ExecRunner{HooksRoot: hooksRoot(loaded)},
 				Logger:        logger,
 				HealthTimeout: *healthTimeout,
 			}
@@ -263,6 +265,7 @@ Flags:`)
 		Store:      st,
 		Logger:     logger,
 		Token:      *diunToken,
+		HMAC:       buildDIUNHMAC(loaded),
 		DedupTTL:   *dedupTTL,
 		Now:        deps.Now,
 	}
@@ -271,7 +274,7 @@ Flags:`)
 		return fmt.Errorf("run: %w", err)
 	}
 	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
-	srv := api.NewServer(*listen, diun, state, logger)
+	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), logger)
 
 	// --- Set up parent context (signals or injected) --------------------
 	var ctx context.Context

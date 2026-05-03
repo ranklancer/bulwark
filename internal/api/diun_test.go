@@ -314,6 +314,80 @@ func TestDIUN_DedupSilencesRepeatNotifications(t *testing.T) {
 
 // --- body size limit --------------------------------------------------------
 
+func TestDIUN_HMAC_AcceptsSignedRequest(t *testing.T) {
+	when := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	scheme := &HMACScheme{Secret: []byte("topsecret"), MaxSkew: time.Minute, Now: func() time.Time { return when }}
+	h := minimalHandler(t, func(h *DIUNHandler) {
+		h.HMAC = scheme
+	})
+
+	body := []byte(`{"image":"ghcr.io/owner/app:1.0"}`)
+	ts, sig := scheme.Sign(body, when)
+	req := httptest.NewRequest("POST", "/api/v1/webhooks/diun", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Bulwark-Timestamp", ts)
+	req.Header.Set("X-Bulwark-Signature", sig)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200; body: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestDIUN_HMAC_RejectsReplayWithStaleTimestamp(t *testing.T) {
+	signedAt := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	verifyAt := signedAt.Add(10 * time.Minute) // past 5-min skew
+	scheme := &HMACScheme{Secret: []byte("topsecret"), MaxSkew: 5 * time.Minute,
+		Now: func() time.Time { return verifyAt }}
+	h := minimalHandler(t, func(h *DIUNHandler) {
+		h.HMAC = scheme
+	})
+
+	body := []byte(`{"image":"x:1"}`)
+	ts, sig := scheme.Sign(body, signedAt)
+	req := httptest.NewRequest("POST", "/api/v1/webhooks/diun", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Bulwark-Timestamp", ts)
+	req.Header.Set("X-Bulwark-Signature", sig)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (stale timestamp)", rec.Code)
+	}
+}
+
+func TestDIUN_HMAC_RejectsTamperedBody(t *testing.T) {
+	when := time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+	scheme := &HMACScheme{Secret: []byte("topsecret"), MaxSkew: time.Minute, Now: func() time.Time { return when }}
+	h := minimalHandler(t, func(h *DIUNHandler) {
+		h.HMAC = scheme
+	})
+
+	original := []byte(`{"image":"x:1"}`)
+	ts, sig := scheme.Sign(original, when)
+	tampered := []byte(`{"image":"y:2"}`)
+
+	req := httptest.NewRequest("POST", "/api/v1/webhooks/diun", bytes.NewReader(tampered))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Bulwark-Timestamp", ts)
+	req.Header.Set("X-Bulwark-Signature", sig)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 (tampered body)", rec.Code)
+	}
+}
+
+func TestDIUN_HMAC_DisabledByDefault(t *testing.T) {
+	// No HMAC configured → signature headers ignored, request succeeds
+	// based on bearer (or anonymous when no token is set either).
+	h := minimalHandler(t)
+	resp := postJSON(h, map[string]any{"image": "x:1"})
+	if resp.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (HMAC disabled)", resp.Code)
+	}
+}
+
 func TestDIUN_RejectsOversizedBody(t *testing.T) {
 	h := minimalHandler(t)
 	huge := strings.Repeat("x", maxDIUNBodyBytes+1024)

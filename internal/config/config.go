@@ -28,11 +28,21 @@ type Config struct {
 	Classification ClassificationConfig `yaml:"classification"`
 	Snapshots      SnapshotsConfig      `yaml:"snapshots"`
 	Health         HealthConfig         `yaml:"health"`
+	Hooks          HooksConfig          `yaml:"hooks"`
 	Notifications  NotificationsConfig  `yaml:"notifications"`
 	Overrides      Overrides            `yaml:"overrides"`
-	Exclude        Exclude              `yaml:"exclude"`
+	Exclude        Exclude               `yaml:"exclude"`
 	API            APIConfig            `yaml:"api"`
 	Logging        LoggingConfig        `yaml:"logging"`
+}
+
+// HooksConfig configures the pre/post/rollback hook subsystem. The single
+// field today is HooksRoot — when set, only scripts inside that directory
+// are allowed to run. Any path supplied via container labels that escapes
+// the root is rejected. Empty HooksRoot keeps the legacy behavior where
+// any executable path is honored.
+type HooksConfig struct {
+	HooksRoot string `yaml:"hooks_root"`
 }
 
 type DockerConfig struct {
@@ -245,6 +255,14 @@ type APIDIUNConfig struct {
 	// Token is an optional shared secret. When set, requests must include
 	// it via either `Authorization: Bearer <token>` or `X-Bulwark-Token`.
 	Token string `yaml:"token"`
+
+	// HMACSecret, when set, layers HMAC-SHA256 replay protection on top of
+	// the bearer token. Each request must carry X-Bulwark-Timestamp and
+	// X-Bulwark-Signature headers signing the body. DIUN can't natively
+	// sign — point DIUN at the bulwark-diun-relay sidecar binary, and
+	// point the relay at Bulwark with the same shared secret.
+	HMACSecret string `yaml:"hmac_secret"`
+
 	// DedupTTL controls per-event silencing when persistent state is
 	// configured. Zero or empty disables dedup.
 	DedupTTL string `yaml:"dedup_ttl"`

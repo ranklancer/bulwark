@@ -162,6 +162,7 @@ Flags:`)
 		Store:      st,
 		Logger:     logger,
 		Token:      *diunToken,
+		HMAC:       buildDIUNHMAC(loaded),
 		DedupTTL:   *dedupTTL,
 	}
 
@@ -170,7 +171,7 @@ Flags:`)
 		return fmt.Errorf("serve: %w", err)
 	}
 	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
-	srv := api.NewServer(*listen, diun, state, logger)
+	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), logger)
 
 	// Production: translate SIGINT/SIGTERM into context cancellation.
 	// Tests: a parent context provided through deps.Ctx is used directly so
