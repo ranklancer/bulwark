@@ -76,6 +76,12 @@ type StateHandler struct {
 	// stay CLI-only by design (destructive, want the operator to type
 	// the explicit `bulwark snapshot restore --yes <id>` CLI form).
 	SnapshotBackend snapshot.Backend
+
+	// Events, when set, powers GET /api/v1/events (Server-Sent Events
+	// stream) and the publish points the daemon's hot paths call. nil
+	// omits the route — the dashboard falls back to the existing
+	// "manual refresh" UX.
+	Events *EventBus
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
@@ -126,6 +132,9 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	}
 	if h.SnapshotBackend != nil {
 		mux.HandleFunc("GET /api/v1/snapshots", h.authed(h.listSnapshots))
+	}
+	if h.Events != nil {
+		mux.HandleFunc("GET /api/v1/events", h.authed(streamHandler(h.Events)))
 	}
 }
 
@@ -332,6 +341,11 @@ func (h *StateHandler) postDecision(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
 		return
 	}
+	h.Events.Publish(Event{
+		Type:      EventDecisionRecorded,
+		Container: rec.ContainerID,
+		Detail:    rec.Decision.String(),
+	})
 	writeJSON(w, http.StatusOK, rec)
 }
 
@@ -356,6 +370,9 @@ func (h *StateHandler) forgetDecision(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		removed++
+	}
+	if removed > 0 {
+		h.Events.Publish(Event{Type: EventDecisionForgot, Container: container})
 	}
 	if removed == 0 {
 		writeJSON(w, http.StatusNotFound, errEnvelope(fmt.Errorf("no decisions for container %q", container)))
@@ -385,6 +402,10 @@ func (h *StateHandler) clearNotifications(w http.ResponseWriter, _ *http.Request
 		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
 		return
 	}
+	h.Events.Publish(Event{
+		Type:   EventNotificationsCleared,
+		Detail: fmt.Sprintf("%d cleared", len(before)),
+	})
 	writeJSON(w, http.StatusOK, map[string]any{"cleared": len(before)})
 }
 

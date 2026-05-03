@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Spinner } from "@/components/ui/Spinner";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/Table";
+import { EventTypes, useLiveRefresh } from "@/lib/events";
 import { riskLabel, riskTone } from "@/lib/format";
 import { useDecide, useQueue } from "@/lib/hooks";
 import type { QueueRow } from "@/lib/types";
@@ -13,6 +14,17 @@ export default function Queue() {
   const { decide, submitting } = useDecide();
   const [pendingRow, setPendingRow] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Refresh on decisions / new scans (which can introduce new
+  // pending rows or remove decided ones).
+  useLiveRefresh(
+    [
+      EventTypes.DecisionRecorded,
+      EventTypes.DecisionForgot,
+      EventTypes.ScanCompleted,
+    ],
+    queue.refresh,
+  );
 
   const rows = useMemo(() => queue.data ?? [], [queue.data]);
   const pending = rows.filter((r) => r.decision === "pending");

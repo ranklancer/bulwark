@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Spinner } from "@/components/ui/Spinner";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/Table";
+import { EventTypes, useLiveRefresh } from "@/lib/events";
 import { formatTimestamp, relativeTime, riskLabel, riskTone } from "@/lib/format";
 import { useScansList, useTriggerScan } from "@/lib/hooks";
 import type { ScanRecord } from "@/lib/types";
@@ -13,6 +14,18 @@ export default function Dashboard() {
   const scans = useScansList(10);
   const { trigger, triggering, error: triggerError } = useTriggerScan();
   const [info, setInfo] = useState<string | null>(null);
+
+  // Live updates: refetch when any of these events arrives so the
+  // dashboard reflects new scans + apply outcomes without polling.
+  useLiveRefresh(
+    [
+      EventTypes.ScanCompleted,
+      EventTypes.ApplySuccess,
+      EventTypes.ApplyFailed,
+      EventTypes.ApplyRolledBack,
+    ],
+    scans.refresh,
+  );
 
   const latest: ScanRecord | undefined = scans.data?.[0];
 

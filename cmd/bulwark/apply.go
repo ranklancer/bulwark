@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/store"
@@ -37,7 +38,7 @@ type applyOutcome struct {
 //
 // Returns a map keyed by container name. Containers without an outcome key
 // were not considered eligible.
-func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *updater.Updater, st *store.Store, logger *slog.Logger) map[string]applyOutcome {
+func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *updater.Updater, st *store.Store, bus *api.EventBus, logger *slog.Logger) map[string]applyOutcome {
 	if u == nil {
 		return nil
 	}
@@ -77,13 +78,20 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 					"container", r.Container.Name,
 					"project", project,
 					"failed_peer", peer)
+				detail := fmt.Sprintf("compose project %q: peer %q failed earlier in this cycle", project, peer)
 				st.Audit(store.AuditEvent{
 					Action:    store.ActionStackSkipped,
 					Container: r.Container.Name,
 					Image:     r.Container.Image,
 					Level:     r.Assessment.Level,
 					Digest:    r.RegistryDigest,
-					Detail:    fmt.Sprintf("compose project %q: peer %q failed earlier in this cycle", project, peer),
+					Detail:    detail,
+				})
+				bus.Publish(api.Event{
+					Type:      api.EventApplyStackSkipped,
+					Container: r.Container.Name,
+					Image:     r.Container.Image,
+					Detail:    detail,
 				})
 				continue
 			}
@@ -116,25 +124,35 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 			Level:     r.Assessment.Level,
 			Digest:    r.RegistryDigest,
 		}
+		var liveType string
 		switch {
 		case oc.Success:
 			ev.Action = store.ActionApplied
 			ev.Detail = fmt.Sprintf("%s → %s", res.OldImage, res.NewImage)
+			liveType = api.EventApplySuccess
 			logger.Info("apply: success", "container", r.Container.Name, "new_id", res.NewContainerID)
 		case oc.RolledBack:
 			ev.Action = store.ActionRolledBack
 			if res.Err != nil {
 				ev.Detail = res.Err.Error()
 			}
+			liveType = api.EventApplyRolledBack
 			logger.Warn("apply: rolled back", "container", r.Container.Name, "err", res.Err)
 		default:
 			ev.Action = store.ActionAppliedFailed
 			if res.Err != nil {
 				ev.Detail = res.Err.Error()
 			}
+			liveType = api.EventApplyFailed
 			logger.Error("apply: failed", "container", r.Container.Name, "err", res.Err)
 		}
 		st.Audit(ev)
+		bus.Publish(api.Event{
+			Type:      liveType,
+			Container: r.Container.Name,
+			Image:     r.Container.Image,
+			Detail:    ev.Detail,
+		})
 		out[r.Container.Name] = oc
 		if !oc.Success && project != "" {
 			// Record this stack as failed so subsequent peers in the

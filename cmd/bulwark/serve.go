@@ -190,6 +190,7 @@ Flags:`)
 		Dispatcher:       dispatcher,
 		LoadedConfig:     loaded,
 		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
+		Events:           api.NewEventBus(),
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 

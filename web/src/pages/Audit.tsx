@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/Table";
+import { EventTypes, useLiveRefresh } from "@/lib/events";
 import { formatTimestamp } from "@/lib/format";
 import { useAudit } from "@/lib/hooks";
 import { Button } from "@/components/ui/Button";
@@ -15,6 +16,22 @@ import { Button } from "@/components/ui/Button";
 export default function Audit() {
   const { data, loading, error, refresh } = useAudit(200);
   const [actionFilter, setActionFilter] = useState<string | "all">("all");
+
+  // The audit log appends from every interesting daemon path — keep
+  // it live by refetching on every event type.
+  useLiveRefresh(
+    [
+      EventTypes.ScanCompleted,
+      EventTypes.DecisionRecorded,
+      EventTypes.DecisionForgot,
+      EventTypes.ApplySuccess,
+      EventTypes.ApplyFailed,
+      EventTypes.ApplyRolledBack,
+      EventTypes.ApplyStackSkipped,
+      EventTypes.NotificationsCleared,
+    ],
+    refresh,
+  );
 
   const actions = useMemo(() => {
     const set = new Set<string>();

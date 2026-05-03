@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
+	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
@@ -34,9 +37,14 @@ type scanCycleConfig struct {
 	// being dispatched immediately. The flush runs out-of-band via
 	// flushDigest on its own cron schedule.
 	DigestBuffer *notifier.DigestBuffer
-	Now          func() time.Time // injected for deterministic tests
-	Logger       *slog.Logger
-	All          bool // include stopped containers
+	// Events, when set, drives the dashboard's live-updates SSE
+	// stream. nil disables event publication entirely (no event
+	// bus, no SSE endpoint — same as a deployment that hasn't yet
+	// had Phase 16f wired into its run.go).
+	Events *api.EventBus
+	Now    func() time.Time // injected for deterministic tests
+	Logger *slog.Logger
+	All    bool // include stopped containers
 }
 
 // scanCycleResult holds everything callers want to render afterwards. We
@@ -101,7 +109,7 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 			// "Auto-updated" framing operators expect to inspect.
 			res.Applies = applyEligibleDryRun(results, cfg.Store, logger)
 		} else {
-			res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, logger)
+			res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, cfg.Events, logger)
 		}
 	}
 
@@ -140,12 +148,60 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 		}
 	}
 
+	var scanID string
 	if cfg.Store != nil {
 		rec := buildScanRecord(results, res.Dispatch, res.StartedAt, res.FinishedAt)
-		if _, err := cfg.Store.RecordScan(rec); err != nil {
+		recorded, err := cfg.Store.RecordScan(rec)
+		if err != nil {
 			logger.Warn("could not persist scan record", "err", err)
+		} else {
+			scanID = recorded.ID
 		}
 	}
 
+	cfg.Events.Publish(api.Event{
+		Type:   api.EventScanCompleted,
+		ScanID: scanID,
+		Detail: scanCompletionDetail(res),
+	})
+
 	return res, nil
+}
+
+// scanCompletionDetail summarises the cycle's outcome as a one-line
+// SSE toast: e.g. "3 pending (1 breaking, 2 review)" or
+// "no pending updates".
+func scanCompletionDetail(res scanCycleResult) string {
+	pending, breaking, review, safe := 0, 0, 0, 0
+	for _, r := range res.Results {
+		if r.Skipped || r.Err != nil || !r.HasUpdate() || r.Assessment == nil {
+			continue
+		}
+		pending++
+		switch r.Assessment.Level.String() {
+		case "breaking":
+			breaking++
+		case "review":
+			review++
+		case "safe":
+			safe++
+		}
+	}
+	if pending == 0 {
+		return "no pending updates"
+	}
+	parts := []string{}
+	if breaking > 0 {
+		parts = append(parts, fmt.Sprintf("%d breaking", breaking))
+	}
+	if review > 0 {
+		parts = append(parts, fmt.Sprintf("%d review", review))
+	}
+	if safe > 0 {
+		parts = append(parts, fmt.Sprintf("%d safe", safe))
+	}
+	if len(parts) == 0 {
+		return fmt.Sprintf("%d pending", pending)
+	}
+	return fmt.Sprintf("%d pending (%s)", pending, strings.Join(parts, ", "))
 }

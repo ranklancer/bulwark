@@ -189,6 +189,9 @@ Flags:`)
 	}
 	dispatcher := notifier.NewDispatcher(notifiers, logger, 30*time.Second)
 
+	// Live-events bus for the dashboard's SSE stream.
+	eventBus := api.NewEventBus()
+
 	// --- Digest mode (optional) ----------------------------------------
 	// When notifications.digest.enabled is true in the YAML, non-urgent
 	// events (everything except BREAKING / rolled-back / stack-skipped /
@@ -266,6 +269,7 @@ Flags:`)
 			DryRun:             *dryRun,
 			MaintenanceWindows: parseMaintenanceWindows(loaded, logger),
 			DigestBuffer:       digestBuf,
+			Events:             eventBus,
 			Now:                deps.Now,
 			Logger:             logger,
 			All:                *all,
@@ -340,6 +344,7 @@ Flags:`)
 		Dispatcher:       dispatcher,
 		LoadedConfig:     loaded,
 		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
+		Events:           eventBus,
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 
