@@ -187,6 +187,32 @@ Flags:`)
 	}
 	dispatcher := notifier.NewDispatcher(notifiers, logger, 30*time.Second)
 
+	// --- Digest mode (optional) ----------------------------------------
+	// When notifications.digest.enabled is true in the YAML, non-urgent
+	// events (everything except BREAKING / rolled-back / stack-skipped /
+	// synthetic) are queued into a buffer and flushed on a separate
+	// cron schedule. Default schedule is "0 8 * * *" — one digest at
+	// 08:00 local time. Operators who don't configure digest get the
+	// classic immediate-dispatch behaviour.
+	var (
+		digestBuf      *notifier.DigestBuffer
+		digestSchedule *scheduler.CronSchedule
+	)
+	if loaded != nil && loaded.Notifications.Digest.Enabled {
+		expr := loaded.Notifications.Digest.Schedule
+		if expr == "" {
+			expr = "0 8 * * *"
+		}
+		parsed, err := scheduler.ParseCron(expr)
+		if err != nil {
+			logger.Warn("run: digest disabled — invalid cron expression",
+				"expr", expr, "err", err)
+		} else {
+			digestSchedule = parsed
+			digestBuf = notifier.NewDigestBuffer()
+		}
+	}
+
 	// --- Build the scan job that the scheduler will invoke periodically.
 	// Important: each invocation gets a fresh scanner.Scanner so the Docker
 	// listing is re-fetched every cycle (containers come and go).
@@ -237,6 +263,7 @@ Flags:`)
 			Apply:              *apply,
 			DryRun:             *dryRun,
 			MaintenanceWindows: parseMaintenanceWindows(loaded, logger),
+			DigestBuffer:       digestBuf,
 			Now:                deps.Now,
 			Logger:             logger,
 			All:                *all,
@@ -255,7 +282,19 @@ Flags:`)
 			"review", review,
 			"safe", safe,
 			"silenced", cycle.DedupSilenced,
+			"digest_queued", cycle.DigestQueued,
 		)
+		return nil
+	}
+
+	// digestJob is the cron-driven flush that runs in its own scheduler
+	// goroutine when digest mode is configured.
+	digestJob := func(ctx context.Context) error {
+		when := time.Now().UTC()
+		if deps.Now != nil {
+			when = deps.Now().UTC()
+		}
+		flushDigest(ctx, digestBuf, dispatcher, st, when, logger)
 		return nil
 	}
 
@@ -340,6 +379,27 @@ Flags:`)
 			if err != nil && !errors.Is(err, context.Canceled) {
 				schedulerErr = err
 				stop() // bring down the server too
+			}
+		}()
+	}
+
+	// Digest scheduler runs only when digest mode was successfully
+	// configured. Failures here downgrade to "no digest" rather than
+	// taking the whole daemon down — the buffer simply accumulates
+	// until restart, at which point the next config load gets another
+	// shot at parsing the cron expression.
+	if digestSchedule != nil && digestBuf != nil {
+		dsch := &scheduler.Scheduler{
+			Cron:   digestSchedule,
+			Job:    digestJob,
+			Logger: logger,
+			Name:   "run/digest",
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := dsch.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				logger.Warn("run: digest scheduler stopped", "err", err)
 			}
 		}()
 	}

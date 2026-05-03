@@ -649,6 +649,86 @@ func TestScanApply_ComposeStack_StopsOnFailure_PeerStackSkipped(t *testing.T) {
 	}
 }
 
+func TestScanApply_DigestBuffer_BuffersNonUrgentDispatchesUrgent(t *testing.T) {
+	// Two updates: one SAFE (should be buffered) and one BREAKING
+	// (should be dispatched immediately). With a DigestBuffer set, the
+	// notifier sees ONE event for this cycle (the BREAKING one) and the
+	// buffer ends up holding the SAFE one for a later flush.
+	st, _ := store.Open(t.TempDir())
+	rec := &recordingNotifier{name: "test", min: types.RiskSafe}
+	digestBuf := notifier.NewDigestBuffer()
+
+	fd := &fakeDocker{
+		containers: []docker.Container{
+			{ID: "id-safe", Name: "safe-svc",
+				Image:   "ghcr.io/owner/safe:1.0",
+				ImageID: "sha256:l-safe", Labels: map[string]string{}},
+			{ID: "id-breaking", Name: "breaking-svc",
+				Image:   "ghcr.io/owner/breaking:1.0",
+				ImageID: "sha256:l-breaking",
+				// Force BREAKING via the existing label override path.
+				Labels: map[string]string{"bulwark.risk": "breaking"}},
+		},
+		images: map[string]*docker.ImageInspect{
+			"sha256:l-safe":     {RepoDigests: []string{"ghcr.io/owner/safe@sha256:old-safe"}},
+			"sha256:l-breaking": {RepoDigests: []string{"ghcr.io/owner/breaking@sha256:old-breaking"}},
+		},
+	}
+	fr := &fakeRegistry{digests: map[string]string{
+		"ghcr.io/owner/safe:1.0":     "sha256:new-safe",
+		"ghcr.io/owner/breaking:1.0": "sha256:new-breaking",
+	}}
+
+	deps := scanDeps{
+		Docker:       fd,
+		Registry:     fr,
+		Notifiers:    []notifier.Notifier{rec},
+		Store:        st,
+		DigestBuffer: digestBuf,
+		Now: func() time.Time {
+			return time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := cmdScanWith(
+		[]string{"--no-fetch-notes", "--no-color", "--notify"},
+		&stdout, &stderr, deps,
+	); err != nil {
+		t.Fatalf("scan: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// Recorded events: only BREAKING fired this cycle.
+	if len(rec.got) != 1 {
+		t.Fatalf("expected 1 dispatched event (BREAKING only); got %d: %+v", len(rec.got), rec.got)
+	}
+	if rec.got[0].Container != "breaking-svc" {
+		t.Errorf("dispatched event = %s, want breaking-svc", rec.got[0].Container)
+	}
+	// Buffer holds the SAFE event waiting for a flush.
+	if got := digestBuf.Len(); got != 1 {
+		t.Errorf("digest buffer Len = %d, want 1", got)
+	}
+
+	// Now flush — the buffered SAFE event should hit the notifier.
+	res := flushDigest(context.Background(), digestBuf, notifier.NewDispatcher(
+		[]notifier.Notifier{rec}, nil, 0,
+	), st, time.Date(2026, 5, 1, 17, 0, 0, 0, time.UTC), nil)
+	if res.Drained != 1 {
+		t.Errorf("flush drained = %d, want 1", res.Drained)
+	}
+	if len(rec.got) != 2 {
+		t.Fatalf("after flush, dispatched = %d, want 2", len(rec.got))
+	}
+	if rec.got[1].Container != "safe-svc" {
+		t.Errorf("flushed event = %s, want safe-svc", rec.got[1].Container)
+	}
+	// Buffer is now empty.
+	if got := digestBuf.Len(); got != 0 {
+		t.Errorf("buffer after flush = %d, want 0", got)
+	}
+}
+
 func TestScanApply_ComposeStack_FailureDoesNotBlockOtherStacks(t *testing.T) {
 	// Two stacks. demo's db rolls back → web is stack-skipped. The OTHER
 	// stack's standalone-style container (project=other) must still be

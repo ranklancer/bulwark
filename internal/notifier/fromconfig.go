@@ -43,6 +43,25 @@ func FromConfig(c *config.Config) ([]Notifier, error) {
 			out = append(out, n)
 		}
 	}
+	if c.Notifications.HomeAssistant.Enabled {
+		n, err := NewHomeAssistant(c.Notifications.HomeAssistant, "homeassistant")
+		if err != nil {
+			errs = append(errs, fmt.Errorf("notifications.homeassistant: %w", err))
+		} else {
+			out = append(out, n)
+		}
+	}
+	if c.Notifications.SMTP.Enabled {
+		// SMTP doesn't carry a min_level field in the YAML schema yet —
+		// default to RiskReview the same way other channels do until the
+		// schema gains one.
+		n, err := NewSMTP(c.Notifications.SMTP, types.RiskReview, "smtp")
+		if err != nil {
+			errs = append(errs, fmt.Errorf("notifications.smtp: %w", err))
+		} else {
+			out = append(out, n)
+		}
+	}
 	for i, gc := range c.Notifications.Generic {
 		if !gc.Enabled {
 			continue

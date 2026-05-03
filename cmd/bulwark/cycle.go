@@ -28,9 +28,15 @@ type scanCycleConfig struct {
 	// containers is constrained. When the slice is empty, apply runs
 	// whenever the rest of the gates allow it (scheduler defaults).
 	MaintenanceWindows []scheduler.Window
-	Now                func() time.Time     // injected for deterministic tests
-	Logger             *slog.Logger
-	All                bool // include stopped containers
+	// DigestBuffer, when non-nil, enables digest mode: non-urgent
+	// notifications (everything except BREAKING / rolled-back /
+	// stack-skipped / synthetic) are queued for later flush instead of
+	// being dispatched immediately. The flush runs out-of-band via
+	// flushDigest on its own cron schedule.
+	DigestBuffer *notifier.DigestBuffer
+	Now          func() time.Time // injected for deterministic tests
+	Logger       *slog.Logger
+	All          bool // include stopped containers
 }
 
 // scanCycleResult holds everything callers want to render afterwards. We
@@ -41,6 +47,7 @@ type scanCycleResult struct {
 	Dispatch         []notifier.DispatchResult
 	DedupSilenced    int                    // events suppressed by TTL silencing
 	ApprovalSilenced int                    // events suppressed by an existing user decision
+	DigestQueued     int                    // events buffered for later digest flush
 	Applies          map[string]applyOutcome // keyed by container name
 	// ApplyGated is true when --apply was set but the maintenance-window
 	// filter blocked the apply phase. Surfaced so callers can render a
@@ -114,8 +121,22 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 		res.DedupSilenced = dedupSilenced
 
 		if len(afterDedup) > 0 {
-			res.Dispatch = cfg.Dispatcher.Dispatch(ctx, afterDedup)
-			markSentEvents(cfg.Store, afterDedup, res.Dispatch, res.FinishedAt, logger)
+			toDispatch := afterDedup
+			if cfg.DigestBuffer != nil {
+				urgent, buffered := notifier.SplitForDigest(afterDedup)
+				if len(buffered) > 0 {
+					cfg.DigestBuffer.Add(buffered)
+					res.DigestQueued = len(buffered)
+					logger.Info("digest: events buffered for next flush",
+						"count", len(buffered),
+						"queue_size", cfg.DigestBuffer.Len())
+				}
+				toDispatch = urgent
+			}
+			if len(toDispatch) > 0 {
+				res.Dispatch = cfg.Dispatcher.Dispatch(ctx, toDispatch)
+				markSentEvents(cfg.Store, toDispatch, res.Dispatch, res.FinishedAt, logger)
+			}
 		}
 	}
 

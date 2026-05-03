@@ -30,13 +30,14 @@ import (
 // scanDeps lets tests substitute the network-touching components. Production
 // leaves all fields nil and cmdScan constructs real clients.
 type scanDeps struct {
-	Docker    scanner.DockerLister
-	Registry  scanner.DigestResolver
-	Notes     scanner.NotesFetcher
-	Notifiers []notifier.Notifier // overrides FromConfig when non-nil
-	Store     *store.Store        // overrides --data-dir when non-nil
-	Updater   *updater.Updater    // overrides Updater construction when --apply is set
-	Now       func() time.Time    // for deterministic dedup tests; defaults to time.Now
+	Docker       scanner.DockerLister
+	Registry     scanner.DigestResolver
+	Notes        scanner.NotesFetcher
+	Notifiers    []notifier.Notifier    // overrides FromConfig when non-nil
+	Store        *store.Store           // overrides --data-dir when non-nil
+	Updater      *updater.Updater       // overrides Updater construction when --apply is set
+	DigestBuffer *notifier.DigestBuffer // optional digest buffer for tests; production wiring happens in `bulwark run`
+	Now          func() time.Time       // for deterministic dedup tests; defaults to time.Now
 }
 
 // cmdScan implements `bulwark scan`. It enumerates the containers on the
@@ -201,6 +202,7 @@ Flags:`)
 		Apply:              *apply,
 		DryRun:             *dryRun,
 		MaintenanceWindows: parseMaintenanceWindows(loaded, logger),
+		DigestBuffer:       deps.DigestBuffer,
 		Now:                now,
 		Logger:             logger,
 		All:                *all,

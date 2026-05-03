@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: #222;">
+  <h2 style="margin-bottom: 0.25em;">Bulwark scan summary</h2>
+  <p style="color: #777; margin-top: 0;">{{ .Now.Format "2006-01-02 15:04:05 UTC" }}</p>
+  {{ range .Events }}
+  <div style="border-left: 4px solid {{ .Color }}; padding: 0.5em 0.75em; margin: 0.75em 0; background: #f7f7f7;">
+    <div style="font-weight: 600; margin-bottom: 0.25em;">{{ .Title }}</div>
+    <table style="border-collapse: collapse; font-size: 14px;">
+      <tr><td style="padding: 2px 8px 2px 0; color: #666;">Container</td><td><code>{{ .Container }}</code></td></tr>
+      <tr><td style="padding: 2px 8px 2px 0; color: #666;">Image</td><td><code>{{ .Image }}</code></td></tr>
+      {{- if or .From .To }}
+      <tr><td style="padding: 2px 8px 2px 0; color: #666;">Version</td><td><code>{{ .From }} &rarr; {{ .To }}</code> ({{ .Kind }})</td></tr>
+      {{- end }}
+      <tr><td style="padding: 2px 8px 2px 0; color: #666;">Risk</td><td>{{ .Risk }}</td></tr>
+      {{- if .StackPeer }}
+      <tr><td style="padding: 2px 8px 2px 0; color: #666;">Stack</td><td>skipped &mdash; peer <code>{{ .StackPeer }}</code> failed in project <code>{{ .Project }}</code></td></tr>
+      {{- end }}
+    </table>
+    {{- if .Rationale }}
+    <p style="margin: 0.5em 0 0 0; color: #444;">{{ .Rationale }}</p>
+    {{- end }}
+    {{- if .ReleaseURL }}
+    <p style="margin: 0.5em 0 0 0;"><a href="{{ .ReleaseURL }}">Release notes</a></p>
+    {{- end }}
+  </div>
+  {{ end }}
+  <p style="color: #aaa; font-size: 12px;">Bulwark</p>
+</body>
+</html>

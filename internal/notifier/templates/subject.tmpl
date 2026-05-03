@@ -1,0 +1,5 @@
+{{- if eq (len .Events) 1 -}}
+{{ (index .Events 0).Title }}
+{{- else -}}
+Bulwark scan: {{ len .Events }} update(s)
+{{- end -}}
