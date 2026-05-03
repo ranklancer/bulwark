@@ -42,13 +42,20 @@ type Server struct {
 // the API, and the DIUN webhook. nil disables rate limiting. The /healthz
 // and /readyz probes are NOT exempt by design — a flooding load balancer
 // is exactly the kind of thing the limiter exists to bound.
-func NewServer(addr string, diun *DIUNHandler, state *StateHandler, limiter *RateLimiter, logger *slog.Logger) *Server {
+//
+// metrics, when non-nil, exposes Prometheus-format counters at /metrics
+// AND records request counts via the same handler chain. nil omits the
+// route entirely.
+func NewServer(addr string, diun *DIUNHandler, state *StateHandler, limiter *RateLimiter, metrics *Metrics, logger *slog.Logger) *Server {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", handleHealth)
 	mux.HandleFunc("GET /readyz", handleHealth)
+	if metrics != nil {
+		mux.Handle("GET /metrics", metrics)
+	}
 	if diun != nil {
 		mux.Handle("POST /api/v1/webhooks/diun", diun)
 	}

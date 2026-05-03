@@ -169,7 +169,38 @@ func (s *Store) RecordDecision(rec ApprovalRecord) error {
 		}
 		return entries[i].RegistryDigest < entries[j].RegistryDigest
 	})
-	return s.saveApprovals(entries)
+	if err := s.saveApprovals(entries); err != nil {
+		return err
+	}
+	s.Audit(AuditEvent{
+		Action:    ActionDecisionRecorded,
+		Actor:     rec.DecidedBy,
+		Container: rec.ContainerName,
+		Image:     rec.Image,
+		Decision:  rec.Decision,
+		Note:      rec.Note,
+		Level:     rec.Level,
+		Digest:    rec.RegistryDigest,
+	})
+	return nil
+}
+
+// LookupDecisionOrLegacy is the migration-aware variant. It tries `key`
+// (new Container.ID form) first, then `legacyKey` (Container.Name form
+// produced by pre-Phase-10 Bulwark). Either hit returns the record;
+// neither returns (nil, nil).
+func (s *Store) LookupDecisionOrLegacy(key, legacyKey ApprovalKey) (*ApprovalRecord, error) {
+	if s == nil {
+		return nil, nil
+	}
+	rec, err := s.LookupDecision(key)
+	if err != nil || rec != nil {
+		return rec, err
+	}
+	if legacyKey == key || legacyKey.ContainerID == "" {
+		return nil, nil
+	}
+	return s.LookupDecision(legacyKey)
 }
 
 // LookupDecision returns the persisted decision for key, or nil if no
@@ -215,7 +246,15 @@ func (s *Store) ForgetDecision(key ApprovalKey) error {
 			continue
 		}
 		entries = append(entries[:i], entries[i+1:]...)
-		return s.saveApprovals(entries)
+		if err := s.saveApprovals(entries); err != nil {
+			return err
+		}
+		s.Audit(AuditEvent{
+			Action:    ActionDecisionForgot,
+			Container: e.ContainerName,
+			Digest:    e.RegistryDigest,
+		})
+		return nil
 	}
 	return ErrNotFound
 }
@@ -225,5 +264,13 @@ func (s *Store) ClearApprovals() error {
 	if s == nil {
 		return nil
 	}
-	return s.saveApprovals(nil)
+	before, _ := s.loadApprovals()
+	if err := s.saveApprovals(nil); err != nil {
+		return err
+	}
+	s.Audit(AuditEvent{
+		Action: ActionDecisionsCleared,
+		Detail: fmt.Sprintf("removed %d", len(before)),
+	})
+	return nil
 }

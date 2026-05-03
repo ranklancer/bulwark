@@ -22,6 +22,7 @@ func EventsFromScan(results []scanner.Result, ts time.Time) []Event {
 		}
 		out = append(out, Event{
 			Container:      r.Container.Name,
+			ContainerID:    r.Container.ID,
 			Image:          r.Container.Image,
 			ComposeProject: r.Container.ComposeProject(),
 			Risk:           r.Assessment.Level,

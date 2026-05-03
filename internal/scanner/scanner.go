@@ -197,6 +197,13 @@ func (s *Scanner) scanOne(ctx context.Context, c docker.Container) Result {
 		return r
 	}
 
+	// Stack-level YAML override applies first, then per-container label
+	// can still ratchet up (same "never silently downgrade" invariant
+	// every other ratchet in this codebase respects).
+	if stackOverride := s.stackRiskOverride(c); stackOverride > assessment.Level {
+		assessment.Level = stackOverride
+		assessment.Rationale = fmt.Sprintf("Risk pinned to %s by stack override. (%s)", stackOverride, assessment.Rationale)
+	}
 	if overrides.RiskOverride != types.RiskUnknown && overrides.RiskOverride > assessment.Level {
 		// Labels can only ratchet risk *up*, never down — same invariant as
 		// the keyword scanner.
@@ -205,6 +212,29 @@ func (s *Scanner) scanOne(ctx context.Context, c docker.Container) Result {
 	}
 	r.Assessment = assessment
 	return r
+}
+
+// stackRiskOverride returns the parsed RiskLevel from the stack-level YAML
+// override (`overrides.stacks.<compose-project>.risk_override`), or
+// RiskUnknown when no project label is set or no override matches.
+//
+// Stack overrides are the operator-friendly counterpart to per-container
+// labels: rather than annotating every service in `media` with
+// `bulwark.risk: review`, set it once in `overrides.stacks.media.risk_override`
+// and every container in that Compose project inherits it.
+func (s *Scanner) stackRiskOverride(c docker.Container) types.RiskLevel {
+	if s.Config == nil {
+		return types.RiskUnknown
+	}
+	project := c.ComposeProject()
+	if project == "" {
+		return types.RiskUnknown
+	}
+	ov, ok := s.Config.Overrides.Stacks[project]
+	if !ok || ov.RiskOverride == "" {
+		return types.RiskUnknown
+	}
+	return types.ParseRiskLevel(ov.RiskOverride)
 }
 
 // matchExclusion returns a non-empty reason string when the container is

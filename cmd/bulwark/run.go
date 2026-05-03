@@ -274,7 +274,7 @@ Flags:`)
 		return fmt.Errorf("run: %w", err)
 	}
 	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
-	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), logger)
+	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 
 	// --- Set up parent context (signals or injected) --------------------
 	var ctx context.Context

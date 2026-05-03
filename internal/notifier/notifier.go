@@ -22,7 +22,13 @@ import (
 // channel implementation might want to render — fields are populated only
 // when known, so consumers should test for emptiness before formatting.
 type Event struct {
-	Container      string
+	// Container is the human-readable container name (no leading slash).
+	Container string
+	// ContainerID is the stable Docker ID. Used as the dedup / approval
+	// key — names are not stable across Compose recreates, IDs are.
+	// Empty when the event is synthesised by `bulwark notify-test` or
+	// when the source pipeline didn't have an ID handy.
+	ContainerID    string
 	Image          string
 	ComposeProject string
 	Risk           types.RiskLevel

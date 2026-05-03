@@ -232,8 +232,8 @@ func filterByDedup(st *store.Store, events []notifier.Event, now time.Time, ttl 
 	kept := make([]notifier.Event, 0, len(events))
 	silenced := 0
 	for _, e := range events {
-		key := dedupKey(e)
-		ok, err := st.ShouldNotify(key, e.Risk, now, ttl)
+		key, legacy := dedupKeyWithLegacy(e)
+		ok, err := st.ShouldNotifyOrLegacy(key, legacy, e.Risk, now, ttl)
 		if err != nil {
 			// Fail open — better to over-notify than to suppress on a store
 			// failure. Log and proceed.
@@ -325,7 +325,7 @@ func markSentEvents(st *store.Store, events []notifier.Event, results []notifier
 		return
 	}
 	for _, e := range events {
-		key := dedupKey(e)
+		key, _ := dedupKeyWithLegacy(e) // always write under the new ID-keyed form
 		meta := store.NotificationRecord{
 			ContainerName: e.Container,
 			Image:         e.Image,
@@ -337,15 +337,22 @@ func markSentEvents(st *store.Store, events []notifier.Event, results []notifier
 	}
 }
 
-func dedupKey(e notifier.Event) store.NotificationKey {
-	// Container name is the most stable identifier we have post-recreate
-	// (the Docker container ID changes whenever the user runs `docker compose
-	// up` and the new image gets a fresh ID). For the dedup key we want the
-	// same identity across recreates so a single update only fires once.
-	return store.NotificationKey{
-		ContainerID:    e.Container,
-		RegistryDigest: e.RegistryDigest,
+// dedupKeyWithLegacy returns the new (Container.ID-keyed) primary key plus
+// the legacy (Container.Name-keyed) fallback. Pre-Phase-10 Bulwark keyed
+// dedup state on the container name; existing on-disk records still resolve
+// via the legacy key until they age out.
+//
+// When ContainerID is empty (synthetic events / older event sources), the
+// primary key falls back to Name and legacy is set to the same key — no
+// behavioural change vs. the legacy code path.
+func dedupKeyWithLegacy(e notifier.Event) (primary, legacy store.NotificationKey) {
+	id := e.ContainerID
+	if id == "" {
+		id = e.Container
 	}
+	primary = store.NotificationKey{ContainerID: id, RegistryDigest: e.RegistryDigest}
+	legacy = store.NotificationKey{ContainerID: e.Container, RegistryDigest: e.RegistryDigest}
+	return primary, legacy
 }
 
 // buildScanRecord materializes a store.ScanRecord from the in-memory results

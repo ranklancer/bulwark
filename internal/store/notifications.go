@@ -68,6 +68,34 @@ func (s *Store) saveNotifications(entries []NotificationRecord) error {
 	return writeAtomic(s.notificationsPath(), data, 0o644)
 }
 
+// ShouldNotifyOrLegacy is the migration-aware variant of ShouldNotify.
+// It first checks `key` (the new Container.ID-keyed form). If no record
+// matches, it consults `legacyKey` (typically the same digest with
+// ContainerID=Container.Name) to honour records written by older
+// Bulwark versions. Either match counts as "already notified".
+//
+// New writes from MarkNotified always land under the primary key, so
+// legacy entries become inert tombstones — they'll be cleared by
+// `bulwark history clear` or naturally as users churn through digests.
+func (s *Store) ShouldNotifyOrLegacy(key, legacyKey NotificationKey, level types.RiskLevel, now time.Time, ttl time.Duration) (bool, error) {
+	if s == nil {
+		return true, nil
+	}
+	ok, err := s.ShouldNotify(key, level, now, ttl)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, nil
+	}
+	if legacyKey == key || legacyKey.ContainerID == "" {
+		return true, nil
+	}
+	// Primary said "yes notify" because the new key isn't recorded.
+	// Check the legacy key — if there's a record there, honour it.
+	return s.ShouldNotify(legacyKey, level, now, ttl)
+}
+
 // ShouldNotify reports whether a notification for key should be sent now,
 // given the dedup TTL. A nil receiver returns true (no store → always
 // notify), so callers can pass a nil *Store unconditionally to opt out of
@@ -186,5 +214,13 @@ func (s *Store) ClearNotifications() error {
 	if s == nil {
 		return nil
 	}
-	return s.saveNotifications(nil)
+	before, _ := s.loadNotifications()
+	if err := s.saveNotifications(nil); err != nil {
+		return err
+	}
+	s.Audit(AuditEvent{
+		Action: ActionDedupCleared,
+		Detail: fmt.Sprintf("removed %d", len(before)),
+	})
+	return nil
 }

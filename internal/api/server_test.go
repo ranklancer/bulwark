@@ -11,7 +11,7 @@ import (
 )
 
 func TestServer_HealthEndpoints(t *testing.T) {
-	srv := NewServer(":0", nil, nil, nil, nil)
+	srv := NewServer(":0", nil, nil, nil, nil, nil)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -47,7 +47,7 @@ func TestServer_Run_GracefulShutdownOnContextCancel(t *testing.T) {
 	addr := listener.Addr().String()
 	listener.Close()
 
-	srv := NewServer(addr, nil, nil, nil, nil)
+	srv := NewServer(addr, nil, nil, nil, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -84,7 +84,7 @@ func TestServer_Run_GracefulShutdownOnContextCancel(t *testing.T) {
 
 func TestServer_DIUNRouteOnlyMountedWhenHandlerNonNil(t *testing.T) {
 	// nil DIUN handler → POST returns 404 (path not mounted)
-	srv := NewServer("127.0.0.1:0", nil, nil, nil, nil)
+	srv := NewServer("127.0.0.1:0", nil, nil, nil, nil, nil)
 	listener, _ := net.Listen("tcp", "127.0.0.1:0")
 	srv.HTTPServer.Addr = listener.Addr().String()
 	go func() { _ = srv.HTTPServer.Serve(listener) }()

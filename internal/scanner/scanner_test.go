@@ -195,6 +195,66 @@ func TestScan_LabelRiskOverride_RatchetsUp(t *testing.T) {
 	}
 }
 
+func TestScan_StackOverride_RatchetsUp(t *testing.T) {
+	fd := &fakeDocker{
+		containers: []docker.Container{{
+			ID: "c1", Name: "sonarr",
+			Image:   "lscr.io/linuxserver/sonarr:4.0.10-ls45",
+			ImageID: "sha256:l1",
+			Labels:  map[string]string{"com.docker.compose.project": "media"},
+		}},
+		images: map[string]*docker.ImageInspect{
+			"sha256:l1": {RepoDigests: []string{"lscr.io/linuxserver/sonarr@sha256:old"}},
+		},
+	}
+	fr := &fakeRegistry{digests: map[string]string{
+		// Tag stays the same; digest movement → SAFE by default.
+		"lscr.io/linuxserver/sonarr:4.0.10-ls45": "sha256:new",
+	}}
+	cfg := config.Defaults()
+	cfg.Overrides.Stacks = map[string]config.Override{
+		"media": {RiskOverride: "review"},
+	}
+	s := newScanner(t, fd, fr, nil)
+	s.Config = cfg
+	results, _ := s.Scan(context.Background(), false)
+	r := results[0]
+	if r.Assessment == nil {
+		t.Fatal("Assessment nil")
+	}
+	if r.Assessment.Level != types.RiskReview {
+		t.Errorf("Level = %v, want Review (stack override)", r.Assessment.Level)
+	}
+}
+
+func TestScan_StackOverride_DoesNotDowngrade(t *testing.T) {
+	// Container would naturally classify as REVIEW (label says review).
+	// Stack override pinned to SAFE — must NOT downgrade.
+	fd := &fakeDocker{
+		containers: []docker.Container{{
+			ID: "c1", Name: "auth", Image: "ghcr.io/owner/auth:1.0", ImageID: "sha256:l",
+			Labels: map[string]string{
+				"com.docker.compose.project": "infra",
+				"bulwark.risk":               "review",
+			},
+		}},
+		images: map[string]*docker.ImageInspect{
+			"sha256:l": {RepoDigests: []string{"ghcr.io/owner/auth@sha256:old"}},
+		},
+	}
+	fr := &fakeRegistry{digests: map[string]string{"ghcr.io/owner/auth:1.0": "sha256:new"}}
+	cfg := config.Defaults()
+	cfg.Overrides.Stacks = map[string]config.Override{
+		"infra": {RiskOverride: "safe"},
+	}
+	s := newScanner(t, fd, fr, nil)
+	s.Config = cfg
+	results, _ := s.Scan(context.Background(), false)
+	if results[0].Assessment.Level != types.RiskReview {
+		t.Errorf("downgrade leaked: Level = %v, want Review", results[0].Assessment.Level)
+	}
+}
+
 func TestScan_LabelRiskOverride_NeverDowngrades(t *testing.T) {
 	// Container with a major bump (BREAKING by default) and a label asking for SAFE.
 	// The label must NOT downgrade the verdict.

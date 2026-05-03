@@ -165,6 +165,67 @@ func TestNotifications_PersistAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestShouldNotifyOrLegacy_HitsLegacyKey(t *testing.T) {
+	// Simulate a pre-Phase-10 record keyed on container name.
+	s := openTestStore(t)
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	legacyKey := NotificationKey{ContainerID: "sonarr", RegistryDigest: "sha256:x"}
+	if err := s.MarkNotified(legacyKey, NotificationRecord{Level: types.RiskReview}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// New code paths look up by Container.ID first (a 64-hex string),
+	// then fall back to the name-keyed entry.
+	newKey := NotificationKey{ContainerID: "abc123def456", RegistryDigest: "sha256:x"}
+	ok, err := s.ShouldNotifyOrLegacy(newKey, legacyKey, types.RiskReview, now.Add(time.Hour), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Errorf("expected legacy hit to silence the notification (within TTL)")
+	}
+}
+
+func TestLookupDecisionOrLegacy_HitsLegacyKey(t *testing.T) {
+	s := openTestStore(t)
+	legacyKey := ApprovalKey{ContainerID: "sonarr", RegistryDigest: "sha256:x"}
+	if err := s.RecordDecision(ApprovalRecord{
+		ApprovalKey: legacyKey, Decision: DecisionApproved, ContainerName: "sonarr",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	newKey := ApprovalKey{ContainerID: "abc123def456", RegistryDigest: "sha256:x"}
+	got, err := s.LookupDecisionOrLegacy(newKey, legacyKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Decision != DecisionApproved {
+		t.Errorf("legacy fallback missed: %+v", got)
+	}
+}
+
+func TestShouldNotifyOrLegacy_PrefersNewKeyWhenBothExist(t *testing.T) {
+	s := openTestStore(t)
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	legacyKey := NotificationKey{ContainerID: "sonarr", RegistryDigest: "sha256:x"}
+	newKey := NotificationKey{ContainerID: "abc123", RegistryDigest: "sha256:x"}
+
+	// Old record (legacy) was marked long ago — past TTL.
+	_ = s.MarkNotified(legacyKey, NotificationRecord{Level: types.RiskReview}, now.Add(-48*time.Hour))
+	// New record (canonical) marked just now — within TTL.
+	_ = s.MarkNotified(newKey, NotificationRecord{Level: types.RiskReview}, now)
+
+	// New key wins → silenced (within TTL of the new record's timestamp).
+	ok, err := s.ShouldNotifyOrLegacy(newKey, legacyKey, types.RiskReview, now.Add(time.Hour), 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok {
+		t.Errorf("expected silence (new key matched within TTL)")
+	}
+}
+
 func TestShouldNotify_NilStoreAlwaysTrue(t *testing.T) {
 	var s *Store
 	ok, err := s.ShouldNotify(NotificationKey{}, types.RiskReview, time.Now(), time.Hour)

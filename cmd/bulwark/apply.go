@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/bulwark-docker/bulwark/internal/notifier"
@@ -69,14 +70,31 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 			RolledBack: res.RolledBack,
 			Err:        res.Err,
 		}
+		ev := store.AuditEvent{
+			Container: r.Container.Name,
+			Image:     r.Container.Image,
+			Level:     r.Assessment.Level,
+			Digest:    r.RegistryDigest,
+		}
 		switch {
 		case oc.Success:
+			ev.Action = store.ActionApplied
+			ev.Detail = fmt.Sprintf("%s → %s", res.OldImage, res.NewImage)
 			logger.Info("apply: success", "container", r.Container.Name, "new_id", res.NewContainerID)
 		case oc.RolledBack:
+			ev.Action = store.ActionRolledBack
+			if res.Err != nil {
+				ev.Detail = res.Err.Error()
+			}
 			logger.Warn("apply: rolled back", "container", r.Container.Name, "err", res.Err)
 		default:
+			ev.Action = store.ActionAppliedFailed
+			if res.Err != nil {
+				ev.Detail = res.Err.Error()
+			}
 			logger.Error("apply: failed", "container", r.Container.Name, "err", res.Err)
 		}
+		st.Audit(ev)
 		out[r.Container.Name] = oc
 	}
 	return out
@@ -92,11 +110,16 @@ func eligibleForApply(r scanner.Result, st *store.Store) bool {
 		if st == nil {
 			return false
 		}
-		key := store.ApprovalKey{
-			ContainerID:    r.Container.Name,
-			RegistryDigest: r.RegistryDigest,
+		// Primary key uses Container.ID (stable across Compose recreates).
+		// Legacy fallback honours pre-Phase-10 records keyed on
+		// Container.Name so an existing approval doesn't silently become
+		// "no decision recorded" the moment a user upgrades Bulwark.
+		primary := store.ApprovalKey{ContainerID: r.Container.ID, RegistryDigest: r.RegistryDigest}
+		legacy := store.ApprovalKey{ContainerID: r.Container.Name, RegistryDigest: r.RegistryDigest}
+		if r.Container.ID == "" {
+			primary = legacy
 		}
-		dec, err := st.LookupDecision(key)
+		dec, err := st.LookupDecisionOrLegacy(primary, legacy)
 		if err != nil || dec == nil {
 			return false
 		}
