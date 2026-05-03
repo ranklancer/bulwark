@@ -91,6 +91,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdQueue(args[1:], stdout, stderr)
 	case "audit":
 		return cmdAudit(args[1:], stdout, stderr)
+	case "snapshot":
+		return cmdSnapshot(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -116,6 +118,7 @@ Commands:
   run                 Run the daemon: periodic scan loop + HTTP server
   queue               Inspect / approve / reject pending REVIEW updates
   audit               Tail the append-only audit log of decisions + applies
+  snapshot            List / restore / prune filesystem snapshots
 
 Run "bulwark <command> --help" for command-specific options.`)
 }

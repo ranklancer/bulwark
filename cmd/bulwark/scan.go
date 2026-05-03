@@ -114,7 +114,9 @@ Flags:`)
 
 	regClient := deps.Registry
 	if regClient == nil {
-		regClient = registry.New()
+		c := registry.New()
+		c.Auth = buildRegistryAuth(loaded, logger)
+		regClient = c
 	}
 
 	var notesFetcher scanner.NotesFetcher
@@ -263,11 +265,28 @@ func buildSnapshotBackend(loaded *config.Config, logger *slog.Logger) snapshot.B
 	if loaded == nil {
 		return nil
 	}
-	name := loaded.Snapshots.Backend
-	b, err := snapshot.New(name)
-	if err != nil {
-		logger.Warn("snapshots: invalid backend; running without snapshots", "name", name, "err", err)
-		return nil
+	name := strings.ToLower(strings.TrimSpace(loaded.Snapshots.Backend))
+	var b snapshot.Backend
+	switch name {
+	case "restic":
+		// Restic needs repo + password-file from YAML; the generic
+		// snapshot.New factory only takes a name. Construct directly so
+		// the misconfiguration ("restic chosen but no repo configured")
+		// produces a clear log line rather than a runtime backup failure.
+		repo := loaded.Snapshots.Restic.Repository
+		pw := loaded.Snapshots.Restic.PasswordFile
+		if repo == "" || pw == "" {
+			logger.Warn("snapshots: restic backend chosen but repository or password_file missing; running without snapshots")
+			return nil
+		}
+		b = snapshot.NewRestic(repo, pw, nil)
+	default:
+		built, err := snapshot.New(name)
+		if err != nil {
+			logger.Warn("snapshots: invalid backend; running without snapshots", "name", name, "err", err)
+			return nil
+		}
+		b = built
 	}
 	if b == nil {
 		return nil

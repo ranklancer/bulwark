@@ -138,7 +138,9 @@ Flags:`)
 	// --- Registry -------------------------------------------------------
 	regClient := deps.Registry
 	if regClient == nil {
-		regClient = registry.New()
+		c := registry.New()
+		c.Auth = buildRegistryAuth(loaded, logger)
+		regClient = c
 	}
 	_ = githubToken // wired in a future revision once release-notes lookup is added to the receiver
 

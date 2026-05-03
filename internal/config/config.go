@@ -33,7 +33,28 @@ type Config struct {
 	Overrides      Overrides            `yaml:"overrides"`
 	Exclude        Exclude               `yaml:"exclude"`
 	API            APIConfig            `yaml:"api"`
+	Registries     RegistriesConfig     `yaml:"registries"`
 	Logging        LoggingConfig        `yaml:"logging"`
+}
+
+// RegistriesConfig controls how Bulwark authenticates against
+// non-public container registries. UseDockerConfig=true makes the
+// daemon read ~/.docker/config.json (auths block, credHelpers,
+// credsStore) the same way `docker login` populates it. Hosts holds
+// explicit per-registry overrides applied BEFORE the docker-config
+// fallback so YAML always wins when both are present.
+type RegistriesConfig struct {
+	UseDockerConfig bool                              `yaml:"use_docker_config"`
+	DockerConfigPath string                           `yaml:"docker_config_path"`
+	Hosts           map[string]RegistryHostCredential `yaml:"hosts"`
+}
+
+// RegistryHostCredential is a single host's static credentials. Either
+// IdentityToken (OAuth2 refresh token) or Username + Password are set.
+type RegistryHostCredential struct {
+	Username      string `yaml:"username"`
+	Password      string `yaml:"password"`
+	IdentityToken string `yaml:"identity_token"`
 }
 
 // HooksConfig configures the pre/post/rollback hook subsystem. The single

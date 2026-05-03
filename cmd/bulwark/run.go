@@ -164,7 +164,9 @@ Flags:`)
 	// --- Registry + release-notes fetcher -------------------------------
 	regClient := deps.Registry
 	if regClient == nil {
-		regClient = registry.New()
+		c := registry.New()
+		c.Auth = buildRegistryAuth(loaded, logger)
+		regClient = c
 	}
 	var notesFetcher scanner.NotesFetcher
 	switch {

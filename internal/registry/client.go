@@ -35,6 +35,12 @@ type Client struct {
 	// this unset, in which case the client speaks https://<reference.Registry>.
 	BaseURL string
 
+	// Auth, when set, supplies credentials for private registries. The
+	// host argument passed to Auth.Lookup is the bare DNS name as it
+	// appears in image references. Anonymous lookups continue to work
+	// when Auth is nil or returns ok=false.
+	Auth Authenticator
+
 	tokensMu sync.Mutex
 	tokens   map[string]string // key: host|scope
 }
@@ -134,34 +140,64 @@ func (c *Client) doManifest(ctx context.Context, method, endpoint, registry, rep
 		return resp, nil
 	}
 
-	// Got 401 — exchange a Bearer challenge for a token and retry once.
+	// Got 401 — exchange a Bearer or Basic challenge for credentials and retry once.
 	challenge := resp.Header.Get("WWW-Authenticate")
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
 	scheme, params := parseChallenge(challenge)
-	if scheme != "bearer" {
+	switch scheme {
+	case "bearer":
+		if params["realm"] == "" {
+			return nil, fmt.Errorf("registry: Bearer challenge missing realm: %q", challenge)
+		}
+		if params["scope"] == "" {
+			params["scope"] = scope
+		}
+
+		tok, err := c.fetchBearerToken(ctx, registry, params)
+		if err != nil {
+			return nil, err
+		}
+		c.cacheToken(registry, scope, tok)
+
+		req2, err := build()
+		if err != nil {
+			return nil, err
+		}
+		req2.Header.Set("Authorization", "Bearer "+tok)
+		return c.HTTPClient.Do(req2)
+
+	case "basic":
+		// Private registries protected by htpasswd / mod_auth_basic
+		// reply with a Basic challenge directly. We retry once with
+		// the credentials from the configured Authenticator. With no
+		// Authenticator (or no creds for this host), we surface the
+		// 401 as an explicit error rather than retrying anonymously
+		// in a loop.
+		creds, ok := c.lookupAuth(registry)
+		if !ok || creds.Empty() {
+			return nil, fmt.Errorf("registry: %s requires Basic auth but no credentials are configured", registry)
+		}
+		req2, err := build()
+		if err != nil {
+			return nil, err
+		}
+		req2.SetBasicAuth(creds.Username, creds.Password)
+		return c.HTTPClient.Do(req2)
+
+	default:
 		return nil, fmt.Errorf("registry: 401 with unsupported challenge %q", challenge)
 	}
-	if params["realm"] == "" {
-		return nil, fmt.Errorf("registry: Bearer challenge missing realm: %q", challenge)
-	}
-	if params["scope"] == "" {
-		params["scope"] = scope
-	}
+}
 
-	tok, err := c.fetchBearerToken(ctx, params)
-	if err != nil {
-		return nil, err
+// lookupAuth is a nil-safe wrapper around c.Auth.Lookup so the call
+// sites stay readable.
+func (c *Client) lookupAuth(host string) (Credentials, bool) {
+	if c.Auth == nil {
+		return Credentials{}, false
 	}
-	c.cacheToken(registry, scope, tok)
-
-	req2, err := build()
-	if err != nil {
-		return nil, err
-	}
-	req2.Header.Set("Authorization", "Bearer "+tok)
-	return c.HTTPClient.Do(req2)
+	return c.Auth.Lookup(host)
 }
 
 func (c *Client) cachedToken(registry, scope string) string {
@@ -178,7 +214,10 @@ func (c *Client) cacheToken(registry, scope, tok string) {
 
 // fetchBearerToken exchanges a WWW-Authenticate challenge for a token by
 // performing a GET against the realm with service+scope as query params.
-func (c *Client) fetchBearerToken(ctx context.Context, params map[string]string) (string, error) {
+// When credentials are configured for the registry host, they are sent
+// as Basic auth on the token request — that's the standard flow for
+// authenticated pulls from private GHCR images, Docker Hub PATs, etc.
+func (c *Client) fetchBearerToken(ctx context.Context, host string, params map[string]string) (string, error) {
 	u, err := url.Parse(params["realm"])
 	if err != nil {
 		return "", fmt.Errorf("registry: parse realm: %w", err)
@@ -197,6 +236,17 @@ func (c *Client) fetchBearerToken(ctx context.Context, params map[string]string)
 		return "", err
 	}
 	req.Header.Set("User-Agent", c.UserAgent)
+	if creds, ok := c.lookupAuth(host); ok {
+		switch {
+		case creds.IdentityToken != "":
+			// OAuth2 refresh-token flow: registries (notably GHCR)
+			// accept the token via the password slot of HTTP Basic
+			// when the username is meaningless.
+			req.SetBasicAuth("<token>", creds.IdentityToken)
+		case creds.Username != "" || creds.Password != "":
+			req.SetBasicAuth(creds.Username, creds.Password)
+		}
+	}
 	resp, err := c.HTTPClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("registry: token request: %w", err)

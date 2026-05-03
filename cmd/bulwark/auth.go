@@ -7,8 +7,51 @@ import (
 
 	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
 )
+
+// buildRegistryAuth turns the loaded YAML registries block into a
+// concrete registry.Authenticator. Returns nil when no auth source is
+// configured so the caller can leave Client.Auth zero and pull from
+// public registries unchanged.
+//
+// Resolution order is composite: explicit YAML hosts first, then the
+// optional Docker config fallback. nil-safe on a nil config (returns nil).
+func buildRegistryAuth(cfg *config.Config, logger *slog.Logger) registry.Authenticator {
+	if cfg == nil {
+		return nil
+	}
+	var sources []registry.Authenticator
+
+	if len(cfg.Registries.Hosts) > 0 {
+		m := make(registry.MapAuth, len(cfg.Registries.Hosts))
+		for host, c := range cfg.Registries.Hosts {
+			m[host] = registry.Credentials{
+				Username:      c.Username,
+				Password:      c.Password,
+				IdentityToken: c.IdentityToken,
+			}
+		}
+		sources = append(sources, m)
+		logger.Info("registries: yaml host credentials loaded",
+			"hosts", len(cfg.Registries.Hosts))
+	}
+
+	if cfg.Registries.UseDockerConfig {
+		sources = append(sources, &registry.DockerConfigAuth{
+			Path:          cfg.Registries.DockerConfigPath,
+			ResolveHelper: registry.DefaultExecHelper,
+		})
+		logger.Info("registries: docker config fallback enabled",
+			"path", cfg.Registries.DockerConfigPath)
+	}
+
+	if len(sources) == 0 {
+		return nil
+	}
+	return registry.CompositeAuth{Auths: sources}
+}
 
 // hooksRoot pulls the configured Hooks.HooksRoot from the loaded YAML, or
 // returns "" when no config was supplied. Centralised here so scan.go and
