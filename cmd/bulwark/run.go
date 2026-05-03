@@ -337,6 +337,7 @@ Flags:`)
 		Sessions:         sessions,
 		SessionInnerAuth: auth, // bare; cookie can't renew itself
 		TriggerScan:      scanJob, // POST /api/v1/scans queue-jumps the next periodic firing
+		Dispatcher:       dispatcher,
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 

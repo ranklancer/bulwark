@@ -187,6 +187,7 @@ Flags:`)
 		Auth:             wrappedAuth,
 		Sessions:         sessions,
 		SessionInnerAuth: auth,
+		Dispatcher:       dispatcher,
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 

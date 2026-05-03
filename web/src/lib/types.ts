@@ -58,3 +58,36 @@ export interface QueueRow {
   decided_at?: string;
   note?: string;
 }
+
+export interface AuditEvent {
+  time: string;
+  action: string;
+  actor?: string;
+  container?: string;
+  image?: string;
+  decision?: string;
+  note?: string;
+  level?: RiskLevel;
+  digest?: string;
+  detail?: string;
+}
+
+export interface NotifierEntry {
+  name: string;
+  min_level: string;
+}
+
+export interface ContainerEntry {
+  container_id?: string;
+  container_name: string;
+  image?: string;
+  compose_project?: string;
+  skipped?: boolean;
+  skip_reason?: string;
+  update_available: boolean;
+  level?: RiskLevel;
+  from?: string;
+  to?: string;
+  last_scan_id?: string;
+  last_scan_at?: string;
+}

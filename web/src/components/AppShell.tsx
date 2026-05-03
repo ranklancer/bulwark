@@ -14,6 +14,9 @@ const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", end: true },
   { to: "/queue", label: "Queue" },
   { to: "/history", label: "History" },
+  { to: "/containers", label: "Containers" },
+  { to: "/notifiers", label: "Notifiers" },
+  { to: "/audit", label: "Audit" },
 ];
 
 /**

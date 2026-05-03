@@ -11,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/store"
+	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
 // StateHandler exposes Bulwark's persistent state (scan history, approval
@@ -52,6 +54,12 @@ type StateHandler struct {
 	// the bootstrap credential before issuing a cookie.
 	Sessions         *SessionScheme
 	SessionInnerAuth Authenticator
+
+	// Dispatcher, when set, exposes the configured notification
+	// channels via GET /api/v1/notifiers and the synthetic-event
+	// "send a test" endpoint at POST /api/v1/notifiers/{name}/test.
+	// nil omits both routes.
+	Dispatcher *notifier.Dispatcher
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
@@ -88,6 +96,13 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 		// deletion (logout button keeps working past TTL).
 		mux.HandleFunc("POST /api/v1/sessions", h.csrfProtect(h.postSession))
 		mux.HandleFunc("DELETE /api/v1/sessions", h.csrfProtect(h.deleteSession))
+	}
+	mux.HandleFunc("GET /api/v1/audit", h.authed(h.listAudit))
+	mux.HandleFunc("GET /api/v1/containers", h.authed(h.listContainers))
+	if h.Dispatcher != nil {
+		mux.HandleFunc("GET /api/v1/notifiers", h.authed(h.listNotifiers))
+		mux.HandleFunc("POST /api/v1/notifiers/{name}/test",
+			h.authed(h.csrfProtect(h.testNotifier)))
 	}
 }
 
@@ -405,6 +420,149 @@ func buildAPIQueueRows(st *store.Store) ([]queueRow, error) {
 
 func errEnvelope(err error) map[string]any {
 	return map[string]any{"error": err.Error()}
+}
+
+// --- /api/v1/audit -----------------------------------------------------------
+
+// listAudit returns the most-recent audit-log entries, newest first.
+// Tail-of-log semantics matches the `bulwark audit` CLI.
+func (h *StateHandler) listAudit(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	events, err := h.Store.ReadAudit(limit)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
+		return
+	}
+	if events == nil {
+		// nil → empty slice so the dashboard's "no events yet"
+		// rendering doesn't have to special-case JSON null.
+		events = []store.AuditEvent{}
+	}
+	writeJSON(w, http.StatusOK, events)
+}
+
+// --- /api/v1/containers ------------------------------------------------------
+
+// containerView is the dashboard-facing summary of one monitored
+// container, derived from the most-recent scan record. We deliberately
+// don't go to the Docker socket here — the latest scan already contains
+// the data + we want the dashboard to be view-only/cheap.
+type containerView struct {
+	ContainerID    string `json:"container_id,omitempty"`
+	ContainerName  string `json:"container_name"`
+	Image          string `json:"image,omitempty"`
+	ComposeProject string `json:"compose_project,omitempty"`
+	Skipped        bool   `json:"skipped,omitempty"`
+	SkipReason     string `json:"skip_reason,omitempty"`
+	UpdateAvailable bool  `json:"update_available"`
+	Level          string `json:"level,omitempty"`
+	From           string `json:"from,omitempty"`
+	To             string `json:"to,omitempty"`
+	LastScanID     string `json:"last_scan_id,omitempty"`
+	LastScanAt     string `json:"last_scan_at,omitempty"`
+}
+
+func (h *StateHandler) listContainers(w http.ResponseWriter, _ *http.Request) {
+	scans, err := h.Store.ListScans(1)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
+		return
+	}
+	if len(scans) == 0 {
+		writeJSON(w, http.StatusOK, []containerView{})
+		return
+	}
+	full, err := h.Store.GetScan(scans[0].ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
+		return
+	}
+	views := make([]containerView, 0, len(full.Results))
+	scanAt := full.FinishedAt.UTC().Format(time.RFC3339)
+	for _, r := range full.Results {
+		views = append(views, containerView{
+			ContainerID:    r.ContainerID,
+			ContainerName:  r.ContainerName,
+			Image:          r.Image,
+			ComposeProject: r.ComposeProject,
+			Skipped:        r.Skipped,
+			SkipReason:     r.SkipReason,
+			UpdateAvailable: r.UpdateAvailable,
+			Level:          r.Level.String(),
+			From:           r.From,
+			To:             r.To,
+			LastScanID:     full.ID,
+			LastScanAt:     scanAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, views)
+}
+
+// --- /api/v1/notifiers -------------------------------------------------------
+
+type notifierView struct {
+	Name     string `json:"name"`
+	MinLevel string `json:"min_level"`
+}
+
+func (h *StateHandler) listNotifiers(w http.ResponseWriter, _ *http.Request) {
+	notifs := h.Dispatcher.Notifiers()
+	out := make([]notifierView, 0, len(notifs))
+	for _, n := range notifs {
+		out = append(out, notifierView{
+			Name:     n.Name(),
+			MinLevel: n.MinLevel().String(),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// testNotifier dispatches a synthetic event to one named channel. The
+// Synthetic flag on the event bypasses MinLevel filtering so the test
+// always reaches the channel regardless of its threshold.
+func (h *StateHandler) testNotifier(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, errEnvelope(errors.New("notifier name is required")))
+		return
+	}
+	var target notifier.Notifier
+	for _, n := range h.Dispatcher.Notifiers() {
+		if n.Name() == name {
+			target = n
+			break
+		}
+	}
+	if target == nil {
+		writeJSON(w, http.StatusNotFound, errEnvelope(fmt.Errorf("no notifier named %q", name)))
+		return
+	}
+	now := time.Now().UTC()
+	event := notifier.Event{
+		Container: "bulwark-notify-test",
+		Image:     "example.com/test:notify",
+		Risk:      types.RiskReview,
+		Action:    types.ActionNeedsReview,
+		Synthetic: true,
+		Timestamp: now,
+		Rationale: "Synthetic test event sent from the dashboard.",
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := target.Notify(ctx, []notifier.Event{event}); err != nil {
+		writeJSON(w, http.StatusBadGateway, errEnvelope(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sent":      true,
+		"notifier":  name,
+		"timestamp": now.Format(time.RFC3339),
+	})
 }
 
 // --- /api/v1/sessions --------------------------------------------------------

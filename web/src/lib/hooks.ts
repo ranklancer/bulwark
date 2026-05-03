@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, apiJson } from "./api";
-import type { QueueRow, ScanRecord } from "./types";
+import type { AuditEvent, ContainerEntry, NotifierEntry, QueueRow, ScanRecord } from "./types";
 
 interface AsyncResource<T> {
   data: T | null;
@@ -125,6 +125,46 @@ export function useDecide() {
   );
 
   return { decide, submitting, error };
+}
+
+export function useAudit(limit = 200) {
+  return useResource<AuditEvent[]>(`/audit?limit=${limit}`);
+}
+
+export function useNotifiers() {
+  return useResource<NotifierEntry[]>("/notifiers");
+}
+
+export function useContainers() {
+  return useResource<ContainerEntry[]>("/containers");
+}
+
+export function useTestNotifier() {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const send = useCallback(async (name: string) => {
+    setBusy(name);
+    setError(null);
+    try {
+      const res = await api(`/notifiers/${encodeURIComponent(name)}/test`, {
+        method: "POST",
+        body: "{}",
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`HTTP ${res.status}: ${body}`);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      throw err;
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  return { send, busy, error };
 }
 
 export function useTriggerScan() {

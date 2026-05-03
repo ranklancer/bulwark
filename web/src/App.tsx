@@ -1,10 +1,13 @@
 import { Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { RequireAuth } from "@/components/RequireAuth";
+import Audit from "@/pages/Audit";
+import Containers from "@/pages/Containers";
 import Dashboard from "@/pages/Dashboard";
 import History from "@/pages/History";
 import HistoryDetail from "@/pages/HistoryDetail";
 import Login from "@/pages/Login";
+import Notifiers from "@/pages/Notifiers";
 import Queue from "@/pages/Queue";
 
 /**
@@ -27,6 +30,9 @@ export default function App() {
         <Route path="queue" element={<Queue />} />
         <Route path="history" element={<History />} />
         <Route path="history/:id" element={<HistoryDetail />} />
+        <Route path="containers" element={<Containers />} />
+        <Route path="notifiers" element={<Notifiers />} />
+        <Route path="audit" element={<Audit />} />
         <Route path="*" element={<Dashboard />} />
       </Route>
     </Routes>
