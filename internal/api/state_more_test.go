@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -9,7 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bulwark-docker/bulwark/internal/config"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
+	"github.com/bulwark-docker/bulwark/internal/snapshot"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
@@ -238,5 +241,173 @@ func TestStateAPI_NotifierRoutes_NotMountedWhenDispatcherNil(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusNotFound {
 		t.Errorf("listNotifiers without Dispatcher = %d, want 404", res.StatusCode)
+	}
+}
+
+func TestStateAPI_GetConfig_RedactsSecrets(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.API.DIUN.Token = "diun-bearer"
+	cfg.API.DIUN.HMACSecret = "hmac-secret-value"
+	cfg.API.Auth.Token = "api-bearer"
+	cfg.Notifications.Slack.Enabled = true
+	cfg.Notifications.Slack.WebhookURL = "https://hooks.slack.example.com/services/abc/xyz"
+	cfg.Notifications.SMTP.Password = "smtp-pass"
+	cfg.Notifications.HomeAssistant.Token = "ha-long-lived-token"
+
+	h, _ := newStateHandlerWithStore(t)
+	h.LoadedConfig = cfg
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/v1/config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	body, _ := io.ReadAll(res.Body)
+	out := string(body)
+
+	for _, secret := range []string{
+		"diun-bearer",
+		"hmac-secret-value",
+		"api-bearer",
+		"hooks.slack.example.com/services/abc/xyz",
+		"smtp-pass",
+		"ha-long-lived-token",
+	} {
+		if strings.Contains(out, secret) {
+			t.Errorf("response leaked secret %q", secret)
+		}
+	}
+	// Sanity: the redaction marker must appear (otherwise the test
+	// would also pass if the field were dropped entirely).
+	if !strings.Contains(out, `"***"`) {
+		t.Errorf("expected redaction marker '***' in response: %s", out)
+	}
+}
+
+func TestStateAPI_GetConfigPolicies_NotMountedWhenConfigNil(t *testing.T) {
+	h, _ := newStateHandlerWithStore(t)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	res1, _ := http.Get(srv.URL + "/api/v1/config")
+	res1.Body.Close()
+	res2, _ := http.Get(srv.URL + "/api/v1/policies")
+	res2.Body.Close()
+
+	if res1.StatusCode != http.StatusNotFound || res2.StatusCode != http.StatusNotFound {
+		t.Errorf("config/policies without LoadedConfig = %d/%d, want 404/404",
+			res1.StatusCode, res2.StatusCode)
+	}
+}
+
+func TestStateAPI_GetPolicies(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Classification.DefaultRisk = "review"
+	h, _ := newStateHandlerWithStore(t)
+	h.LoadedConfig = cfg
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/api/v1/policies")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["classifier"] == nil {
+		t.Errorf("body missing classifier: %+v", body)
+	}
+	if _, ok := body["overrides"]; !ok {
+		t.Errorf("body missing overrides: %+v", body)
+	}
+}
+
+// fakeSnapshotBackend satisfies snapshot.Backend for tests. Unrelated
+// to the cmd/bulwark fake — kept local to keep this test file
+// self-contained.
+type fakeSnapshotBackend struct {
+	snaps []snapshot.Snapshot
+	err   error
+}
+
+func (f *fakeSnapshotBackend) Name() string                                            { return "fake" }
+func (f *fakeSnapshotBackend) Available(_ context.Context) bool                        { return true }
+func (f *fakeSnapshotBackend) Snapshot(_ context.Context, _, _ string) (string, error) { return "", nil }
+func (f *fakeSnapshotBackend) Restore(_ context.Context, _ string) error               { return nil }
+func (f *fakeSnapshotBackend) Destroy(_ context.Context, _ string) error               { return nil }
+func (f *fakeSnapshotBackend) List(_ context.Context, _ string) ([]snapshot.Snapshot, error) {
+	return f.snaps, f.err
+}
+
+func TestStateAPI_ListSnapshots(t *testing.T) {
+	now := time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC)
+	be := &fakeSnapshotBackend{
+		snaps: []snapshot.Snapshot{
+			{ID: "abc", Target: "/var/lib/sonarr", Label: "sonarr", CreatedAt: now},
+		},
+	}
+	h, _ := newStateHandlerWithStore(t)
+	h.SnapshotBackend = be
+
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Missing target → 400.
+	res1, _ := http.Get(srv.URL + "/api/v1/snapshots")
+	res1.Body.Close()
+	if res1.StatusCode != http.StatusBadRequest {
+		t.Errorf("missing target = %d, want 400", res1.StatusCode)
+	}
+
+	// With target → returns rows.
+	res2, err := http.Get(srv.URL + "/api/v1/snapshots?target=/var/lib/sonarr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	if res2.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res2.StatusCode)
+	}
+	var rows []snapshotView
+	if err := json.NewDecoder(res2.Body).Decode(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ID != "abc" {
+		t.Errorf("rows = %+v", rows)
+	}
+}
+
+func TestStateAPI_ListSnapshots_NotMountedWhenBackendNil(t *testing.T) {
+	h, _ := newStateHandlerWithStore(t)
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	res, _ := http.Get(srv.URL + "/api/v1/snapshots?target=/foo")
+	res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("snapshots without backend = %d, want 404", res.StatusCode)
 	}
 }

@@ -9,6 +9,8 @@ import HistoryDetail from "@/pages/HistoryDetail";
 import Login from "@/pages/Login";
 import Notifiers from "@/pages/Notifiers";
 import Queue from "@/pages/Queue";
+import Settings from "@/pages/Settings";
+import Snapshots from "@/pages/Snapshots";
 
 /**
  * Top-level routes. The shell layout wraps every authenticated route
@@ -32,7 +34,9 @@ export default function App() {
         <Route path="history/:id" element={<HistoryDetail />} />
         <Route path="containers" element={<Containers />} />
         <Route path="notifiers" element={<Notifiers />} />
+        <Route path="snapshots" element={<Snapshots />} />
         <Route path="audit" element={<Audit />} />
+        <Route path="settings" element={<Settings />} />
         <Route path="*" element={<Dashboard />} />
       </Route>
     </Routes>

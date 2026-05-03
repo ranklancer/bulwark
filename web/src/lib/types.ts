@@ -77,6 +77,13 @@ export interface NotifierEntry {
   min_level: string;
 }
 
+export interface SnapshotEntry {
+  id: string;
+  target: string;
+  label?: string;
+  created_at: string;
+}
+
 export interface ContainerEntry {
   container_id?: string;
   container_name: string;

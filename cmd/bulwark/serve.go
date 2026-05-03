@@ -188,6 +188,8 @@ Flags:`)
 		Sessions:         sessions,
 		SessionInnerAuth: auth,
 		Dispatcher:       dispatcher,
+		LoadedConfig:     loaded,
+		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 

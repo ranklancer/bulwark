@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, apiJson } from "./api";
-import type { AuditEvent, ContainerEntry, NotifierEntry, QueueRow, ScanRecord } from "./types";
+import type { AuditEvent, ContainerEntry, NotifierEntry, QueueRow, ScanRecord, SnapshotEntry } from "./types";
 
 interface AsyncResource<T> {
   data: T | null;
@@ -137,6 +137,49 @@ export function useNotifiers() {
 
 export function useContainers() {
   return useResource<ContainerEntry[]>("/containers");
+}
+
+export function useConfig() {
+  return useResource<unknown>("/config");
+}
+
+export function usePolicies() {
+  return useResource<{ classifier: unknown; overrides: unknown }>("/policies");
+}
+
+export function useSnapshots(target: string) {
+  // Empty target → don't fetch (the page renders an "enter a target"
+  // prompt). useResource keys on the path string, so passing empty
+  // means we just don't call.
+  const path = target ? `/snapshots?target=${encodeURIComponent(target)}` : "";
+  const [data, setData] = useState<SnapshotEntry[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    if (!target) {
+      setData(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      const body = await apiJson<SnapshotEntry[]>(path);
+      setData(body);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [target, path]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return { data, loading, error, refresh };
 }
 
 export function useTestNotifier() {

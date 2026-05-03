@@ -11,7 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"gopkg.in/yaml.v3"
+
+	"github.com/bulwark-docker/bulwark/internal/config"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
+	"github.com/bulwark-docker/bulwark/internal/snapshot"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
@@ -60,6 +64,18 @@ type StateHandler struct {
 	// "send a test" endpoint at POST /api/v1/notifiers/{name}/test.
 	// nil omits both routes.
 	Dispatcher *notifier.Dispatcher
+
+	// LoadedConfig, when set, is exposed (with secrets redacted) via
+	// GET /api/v1/config and feeds the GET /api/v1/policies effective-
+	// classifier-config response. nil omits both routes — the
+	// dashboard then renders "config not exposed" rather than failing.
+	LoadedConfig *config.Config
+
+	// SnapshotBackend, when set, exposes GET /api/v1/snapshots for the
+	// dashboard's snapshot panel. Listing is read-only; restore + prune
+	// stay CLI-only by design (destructive, want the operator to type
+	// the explicit `bulwark snapshot restore --yes <id>` CLI form).
+	SnapshotBackend snapshot.Backend
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
@@ -103,6 +119,13 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 		mux.HandleFunc("GET /api/v1/notifiers", h.authed(h.listNotifiers))
 		mux.HandleFunc("POST /api/v1/notifiers/{name}/test",
 			h.authed(h.csrfProtect(h.testNotifier)))
+	}
+	if h.LoadedConfig != nil {
+		mux.HandleFunc("GET /api/v1/config", h.authed(h.getConfig))
+		mux.HandleFunc("GET /api/v1/policies", h.authed(h.getPolicies))
+	}
+	if h.SnapshotBackend != nil {
+		mux.HandleFunc("GET /api/v1/snapshots", h.authed(h.listSnapshots))
 	}
 }
 
@@ -517,6 +540,91 @@ func (h *StateHandler) listNotifiers(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, notifierView{
 			Name:     n.Name(),
 			MinLevel: n.MinLevel().String(),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// --- /api/v1/config ----------------------------------------------------------
+
+// getConfig returns the loaded YAML config rendered as JSON with every
+// well-known credential field replaced by "***". The dashboard's
+// Settings page renders this verbatim so operators can verify what
+// the daemon actually sees without having to shell into the host to
+// `cat bulwark.yaml`.
+//
+// Round-trip via yaml so the keys the dashboard sees match the
+// snake_case the operator typed in the YAML, not Go's CamelCase
+// field names. (The Config struct carries `yaml:` tags but no
+// `json:` tags.)
+func (h *StateHandler) getConfig(w http.ResponseWriter, _ *http.Request) {
+	raw, err := yaml.Marshal(h.LoadedConfig)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
+		return
+	}
+	var tree any
+	if err := yaml.Unmarshal(raw, &tree); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
+		return
+	}
+	redactSecrets(tree)
+	writeJSON(w, http.StatusOK, tree)
+}
+
+// --- /api/v1/policies --------------------------------------------------------
+
+// getPolicies returns the effective classifier policy after merging
+// defaults with config + overrides. The dashboard renders this so
+// operators can see exactly what each tier maps to and which stacks /
+// containers carry overrides without having to mentally merge YAML.
+type policiesView struct {
+	Classifier any         `json:"classifier"`
+	Overrides  any         `json:"overrides"`
+}
+
+func (h *StateHandler) getPolicies(w http.ResponseWriter, _ *http.Request) {
+	cfg := h.LoadedConfig
+	if cfg == nil {
+		writeJSON(w, http.StatusNotFound, errEnvelope(errors.New("config not loaded")))
+		return
+	}
+	out := policiesView{
+		Classifier: cfg.ClassifierConfig(),
+		Overrides:  cfg.Overrides,
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// --- /api/v1/snapshots -------------------------------------------------------
+
+type snapshotView struct {
+	ID        string `json:"id"`
+	Target    string `json:"target"`
+	Label     string `json:"label,omitempty"`
+	CreatedAt string `json:"created_at"`
+}
+
+func (h *StateHandler) listSnapshots(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Query().Get("target")
+	if target == "" {
+		writeJSON(w, http.StatusBadRequest, errEnvelope(errors.New("target query parameter is required")))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	snaps, err := h.SnapshotBackend.List(ctx, target)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, errEnvelope(err))
+		return
+	}
+	out := make([]snapshotView, 0, len(snaps))
+	for _, s := range snaps {
+		out = append(out, snapshotView{
+			ID:        s.ID,
+			Target:    s.Target,
+			Label:     s.Label,
+			CreatedAt: s.CreatedAt.UTC().Format(time.RFC3339),
 		})
 	}
 	writeJSON(w, http.StatusOK, out)
