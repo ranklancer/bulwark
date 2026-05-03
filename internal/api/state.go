@@ -735,7 +735,7 @@ func (h *StateHandler) postSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value, exp := h.Sessions.Issue()
-	http.SetCookie(w, h.Sessions.BuildCookie(value, exp, r.TLS != nil))
+	http.SetCookie(w, h.Sessions.BuildCookie(value, exp, isSecureRequest(r)))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"expires_at": exp.UTC().Format(time.RFC3339),
 		"ttl_seconds": int(time.Until(exp).Seconds()),

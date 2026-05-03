@@ -11,7 +11,7 @@ on failure.
 It is the spiritual successor to Watchtower (archived December 2025) and goes
 substantially further: every update is _understood_ before it is applied.
 
-> **Status:** v0.1.0-ready. The full pipeline is shipped: classifier,
+> **Status:** v1.0-ready. The full pipeline is shipped: classifier,
 > notification dispatcher (Slack / Discord / Home Assistant / SMTP / digest /
 > generic webhooks), persistent state (dedup, scan history, approval queue,
 > append-only audit log), HTTP API + DIUN-compatible webhook receiver,
@@ -68,24 +68,27 @@ and per-container Docker labels.
 ### Run from a published image
 
 ```sh
-# 1. Generate a bearer token + put it in .env
-echo "BULWARK_API_TOKEN=$(openssl rand -hex 32)" > .env
-
-# 2. Copy + adjust the config
+# 1. Generate a starter config + bearer token in one shot.
 mkdir -p config data
-cp configs/bulwark.example.yaml config/bulwark.yaml
-# In config/bulwark.yaml set api.auth.type: bearer
+docker run --rm -v $(pwd)/config:/config \
+    ghcr.io/ranklancer/bulwark:latest \
+    init --output /config/bulwark.yaml
+# This prints the bearer token to stdout — copy it; it appears once.
 
-# 3. Run the daemon
+# 2. Run the daemon.
 docker compose -f docker-compose.example.yaml up -d
 
-# 4. Open the dashboard
-open http://localhost:8080/    # paste the same token at /login
+# 3. Open the dashboard.
+open http://localhost:8080/    # paste the token at /login
 ```
 
 The dashboard's `/login` page exchanges the bearer token for an HTTP-only
 session cookie — the token is never stored in the browser. Pages auto-update
 as scans complete + apply outcomes land, via Server-Sent Events.
+
+Operators who prefer to manage the token via env-var substitution can copy
+`configs/bulwark.minimal.yaml` instead and set `BULWARK_API_TOKEN` in
+`.env`. Both paths produce a working daemon.
 
 ### Build from source
 
@@ -97,7 +100,8 @@ git clone https://github.com/ranklancer/bulwark
 cd bulwark
 cd web && npm ci && npm run build && cd ..
 go build ./cmd/bulwark
-./bulwark version
+./bulwark init --output ./bulwark.yaml
+./bulwark run --config ./bulwark.yaml --data-dir ./data
 ```
 
 The committed `internal/api/ui-react/dist/` placeholder lets `go build`
@@ -110,6 +114,10 @@ the full experience.
 ## CLI
 
 ```sh
+# Generate a starter config with a fresh bearer token (mode 0600).
+# Prints the token to stdout — copy it before closing the terminal.
+bulwark init --output ./bulwark.yaml
+
 # Scan all containers managed by the local Docker daemon, look for digest
 # movement on each pinned tag, and report pending updates with risk levels.
 bulwark scan

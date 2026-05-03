@@ -162,6 +162,32 @@ func (a CookieOrInnerAuth) Authenticate(r *http.Request) (Identity, error) {
 	return a.Inner.Authenticate(r)
 }
 
+// isSecureRequest reports whether the connection — as the browser
+// sees it — is HTTPS. Two paths:
+//
+//   - Direct TLS termination by Bulwark: r.TLS != nil.
+//   - TLS-terminating reverse proxy (nginx, Traefik, Caddy,
+//     Cloudflare): the proxy advertises the original scheme via
+//     X-Forwarded-Proto. We honour the leftmost value (per RFC 7239
+//     this is the original client's protocol).
+//
+// Used to decide whether session cookies get the Secure flag. A
+// spoofed X-Forwarded-Proto: https on a plain-HTTP request causes
+// Bulwark to issue a Secure cookie that modern browsers refuse to
+// accept on non-HTTPS responses (RFC 6265bis), so the worst case is
+// a failed login on a misconfigured client — not credential theft.
+func isSecureRequest(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	proto := r.Header.Get("X-Forwarded-Proto")
+	if proto == "" {
+		return false
+	}
+	leftmost := strings.TrimSpace(strings.SplitN(proto, ",", 2)[0])
+	return strings.EqualFold(leftmost, "https")
+}
+
 // ErrSessionsDisabled is returned by the session endpoints when no
 // SessionScheme was wired at construction time. Surfaces as 404 to
 // keep the endpoint indistinguishable from a missing route to scanners.

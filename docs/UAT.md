@@ -279,6 +279,274 @@ BULWARK_CONTAINER_ID, and BULWARK_SNAPSHOT_ID (when configured).
 
 ---
 
+## 13. Dashboard sign-in (bearer → cookie)
+
+The React dashboard exchanges your bearer token for an HTTP-only
+session cookie. The token never touches `localStorage`.
+
+```sh
+# Generate a starter config + token in one step:
+bulwark init --output ./bulwark.yaml
+# Copy the printed token; you'll need it on the login page.
+
+bulwark run --config ./bulwark.yaml --data-dir ./data &
+open http://localhost:8080/
+```
+
+What to check:
+
+- Visiting `/` while signed-out redirects to `/login`.
+- Pasting the bearer token + clicking "Sign in" puts you on the
+  dashboard.
+- The browser's cookie inspector shows `bulwark_session` with
+  `HttpOnly` set, `SameSite=Lax`, and (if you're behind a TLS
+  proxy that sets `X-Forwarded-Proto: https`) `Secure`.
+- Closing + reopening the browser keeps you signed in until the
+  12h expiry. Clicking "Sign out" drops the cookie immediately.
+
+## 14. SPA pages render
+
+Click each primary nav entry. Each page must render without a
+console error.
+
+| Page | Verifies |
+|---|---|
+| `/` Dashboard | Latest scan summary cards, recent-scans table, "Scan now" button |
+| `/queue` | Pending REVIEW decisions with Approve / Reject buttons |
+| `/history` | Paginated scan list, "All / Has-pending / Has-breaking" filter chips |
+| `/history/<id>` | Per-container result rows, click-to-expand digest detail |
+| `/containers` | Last-scan inventory of every monitored container |
+| `/notifiers` | Configured channels with min-level + Send-test button (or "no notifiers configured" empty state) |
+| `/snapshots` | Target input → snapshot list (or "no backend configured" message) |
+| `/audit` | Newest-first event table with auto-detected action filter chips |
+| `/settings` | Loaded YAML (with `***` redactions) + effective classifier policies |
+
+Browser console (F12 → Console) should be silent. Any uncaught
+exception or 4xx/5xx visible in the Network tab is a UAT failure.
+
+## 15. Live updates (Server-Sent Events)
+
+The dashboard auto-refreshes on key daemon events. No polling.
+
+```sh
+# In one terminal, with bulwark running:
+curl -X POST -H "Authorization: Bearer <token>" \
+     http://localhost:8080/api/v1/scans
+```
+
+What to check:
+
+- The dashboard's "Recent scans" table gains a new row within a
+  second of the curl call. No browser refresh required.
+- Browser DevTools → Network → "events" entry shows a long-lived
+  `text/event-stream` response with periodic `: heartbeat`
+  comments and `event: scan.completed` entries on each scan.
+- `/audit` and `/queue` similarly auto-refresh on
+  `decision.recorded`, `apply.success`, `apply.rolled_back`, etc.
+
+## 16. Audit log (CLI + dashboard)
+
+Every decision, apply, rollback, and stack-skip lands in the
+append-only audit log.
+
+```sh
+# Make a decision, then list audit events.
+bulwark queue approve sonarr --note "tested" --data-dir ./data
+bulwark audit --data-dir ./data --limit 20
+
+# The same data is visible at /audit in the dashboard.
+```
+
+What to check:
+
+- The CLI output and the dashboard's `/audit` table show identical
+  rows in the same newest-first order.
+- Filter chips on `/audit` narrow the list (e.g. only
+  `apply.success` or `decision.recorded`).
+- `bulwark audit --json` emits one JSON object per line, suitable
+  for `jq` / Loki ingestion.
+
+## 17. Compose-aware apply (`depends_on` topology)
+
+Bulwark applies updates in a Compose stack in dependency-first
+order; if a dep fails, peers in the same stack are stack-skipped.
+
+```yaml
+# uat-compose.yaml
+services:
+  db:
+    image: postgres:15
+    healthcheck:
+      test: ["CMD", "pg_isready"]
+      start_period: 30s
+    labels:
+      bulwark.enable: "true"
+  web:
+    image: ghcr.io/owner/app:1.0
+    depends_on:
+      db:
+        condition: service_started
+    labels:
+      bulwark.enable: "true"
+```
+
+```sh
+docker compose -f uat-compose.yaml up -d
+bulwark scan --apply --data-dir ./data
+```
+
+What to check:
+
+- The daemon log line for the apply phase shows `db` pulled
+  before `web` (dependency order respected).
+- If you intentionally break `db`'s health (set the wrong
+  `pg_isready` args), `web` is reported as `apply.stack_skipped`
+  in `bulwark audit` and the dashboard's `/audit` page shows the
+  same event with a "peer X failed" detail.
+
+## 18. Snapshot CLI (list / restore / prune)
+
+Read-only listing on the dashboard; destructive actions stay on
+the CLI behind `--yes`.
+
+```sh
+# After a snapshot has been taken (auto, during an apply with
+# bulwark.snapshot.dataset set on the container):
+bulwark snapshot list /var/lib/sonarr --config ./bulwark.yaml
+
+# Restore is destructive; --yes is required.
+bulwark snapshot restore <id> --yes --config ./bulwark.yaml
+
+# Prune frees the storage:
+bulwark snapshot prune <id> --yes --config ./bulwark.yaml
+```
+
+What to check:
+
+- The dashboard's `/snapshots` page lists the same rows when you
+  paste the same target.
+- Without `--yes`, restore + prune fail with a clear
+  "confirmation required" message — no destructive action.
+- After restore, the container's data matches what was captured
+  at snapshot time (verify with a known-good fixture file).
+
+## 19. Maintenance windows + dry-run + manual scan trigger
+
+Three production-safety knobs.
+
+```yaml
+# bulwark.yaml — gate auto-apply to a specific window
+schedule:
+  maintenance_windows:
+    - start: "02:00"
+      end: "06:00"
+      days: [monday, tuesday, wednesday, thursday, friday]
+```
+
+```sh
+# Outside the window: scans + notifications still run, but apply
+# is gated.
+bulwark run --config ./bulwark.yaml --data-dir ./data --apply
+
+# Dry-run: full pipeline through eligibility + notification, but
+# the updater is NEVER invoked. Audit events tagged "dry-run".
+bulwark run --config ./bulwark.yaml --data-dir ./data --apply --dry-run
+
+# Manual trigger via the API (runs an immediate scan).
+curl -X POST -H "Authorization: Bearer <token>" \
+     http://localhost:8080/api/v1/scans
+```
+
+What to check:
+
+- Outside the window: log lines say "outside maintenance window;
+  skipping apply phase". Notifications still fire so you see
+  pending work.
+- `--dry-run`: `docker ps` shows zero new containers. `bulwark
+  audit` rows have `"detail": "dry-run"`.
+- `POST /api/v1/scans`: returns 202 immediately; the new scan
+  appears in `bulwark history list` within seconds.
+
+## 20. Notifier send-test
+
+Verifies wiring from Bulwark all the way to the channel.
+
+```sh
+# 1. Configure at least one notifier (Slack, Discord, HA, SMTP, generic).
+# 2. From the dashboard, visit /notifiers and click "Send test"
+#    on the channel of your choice.
+```
+
+What to check:
+
+- A synthetic event arrives in the real Slack channel / Discord
+  webhook / HA mobile app / mailbox / etc.
+- The synthetic flag bypasses `min_level` filtering — even a
+  channel set to `min_level: breaking` receives the test event.
+- The dashboard shows "Test event sent to <name>." inline. An
+  audit row appears for the dispatch.
+- Equivalent CLI: `bulwark notify-test --config ./bulwark.yaml`.
+
+## 21. Private registry auth
+
+Bulwark resolves credentials in this order: explicit YAML hosts
+first, then `~/.docker/config.json` (when enabled).
+
+```sh
+# Option A — Docker CLI managed:
+docker login ghcr.io
+# bulwark.yaml:
+#   registries:
+#     use_docker_config: true
+
+# Option B — explicit YAML:
+# registries:
+#   hosts:
+#     ghcr.io:
+#       identity_token: "${GITHUB_TOKEN}"
+
+# Then scan an image from that registry:
+bulwark scan --config ./bulwark.yaml | grep ghcr.io
+```
+
+What to check:
+
+- Scans of private images succeed (no `401 Unauthorized`).
+- Verbose mode (`-v`) shows the registry client picking up the
+  token from the configured source.
+- Wrong / missing credentials surface a clear `manifest unknown`
+  or `denied` error, not a silent fall-through.
+
+## 22. Forward-proxy auth (Authelia / Authentik smoke)
+
+For SSO / MFA, put Bulwark behind a proxy that terminates auth
+upstream and trust the resulting identity headers.
+
+```yaml
+# bulwark.yaml
+api:
+  auth:
+    type: forward-proxy
+    trusted_proxies:
+      - 192.0.2.0/24       # the network your reverse proxy lives in
+    user_header: Remote-User
+    groups_header: Remote-Groups
+    required_group: bulwark-operators
+```
+
+What to check:
+
+- Requests from outside `trusted_proxies` get 403, even if they
+  carry `Remote-User`.
+- Requests from inside the trusted network with no identity
+  headers get 401.
+- Requests with valid headers succeed; the daemon log lines show
+  the user from `Remote-User`.
+- A user in the IdP but NOT in `bulwark-operators` (or whichever
+  group you set) gets 403.
+
+---
+
 ## Reporting issues
 
 When filing a bug, include:

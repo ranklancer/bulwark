@@ -93,6 +93,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdAudit(args[1:], stdout, stderr)
 	case "snapshot":
 		return cmdSnapshot(args[1:], stdout, stderr)
+	case "init":
+		return cmdInit(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command: %s\n\n", args[0])
 		printRootUsage(stderr)
@@ -119,6 +121,7 @@ Commands:
   queue               Inspect / approve / reject pending REVIEW updates
   audit               Tail the append-only audit log of decisions + applies
   snapshot            List / restore / prune filesystem snapshots
+  init                Generate a starter config + bearer token
 
 Run "bulwark <command> --help" for command-specific options.`)
 }

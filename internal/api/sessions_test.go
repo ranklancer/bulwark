@@ -426,6 +426,87 @@ func TestStateAPI_GetSessionProbe(t *testing.T) {
 	})
 }
 
+// TestStateAPI_SessionLoginRespectsForwardedProto asserts the
+// X-Forwarded-Proto trust path: behind a TLS-terminating reverse
+// proxy the daemon's r.TLS is nil even though the client connection
+// is HTTPS. The cookie must still get the Secure flag so it isn't
+// returned over a downgraded HTTP request.
+func TestStateAPI_SessionLoginRespectsForwardedProto(t *testing.T) {
+	st, _ := store.Open(t.TempDir())
+	scheme, _ := NewSessionScheme(time.Hour)
+	bearer := BearerAuth{Token: "tok"}
+	h := &StateHandler{
+		Store:            st,
+		Auth:             CookieOrInnerAuth{Inner: bearer, Sessions: scheme},
+		Sessions:         scheme,
+		SessionInnerAuth: bearer,
+	}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux) // plain HTTP — r.TLS will be nil
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/sessions", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Forwarded-Proto", "https") // the proxy's signal
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", res.StatusCode)
+	}
+
+	var found *http.Cookie
+	for _, c := range res.Cookies() {
+		if c.Name == SessionCookieName {
+			found = c
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("session cookie missing")
+	}
+	if !found.Secure {
+		t.Errorf("Secure flag not set despite X-Forwarded-Proto: https")
+	}
+}
+
+func TestStateAPI_SessionLoginNoSecureWithoutForwardedProto(t *testing.T) {
+	// Sanity: without X-Forwarded-Proto, plain HTTP login still
+	// works but the cookie doesn't carry Secure (correct for
+	// localhost / dev deployments).
+	st, _ := store.Open(t.TempDir())
+	scheme, _ := NewSessionScheme(time.Hour)
+	bearer := BearerAuth{Token: "tok"}
+	h := &StateHandler{
+		Store:            st,
+		Auth:             CookieOrInnerAuth{Inner: bearer, Sessions: scheme},
+		Sessions:         scheme,
+		SessionInnerAuth: bearer,
+	}
+	mux := http.NewServeMux()
+	h.Register(mux)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/sessions", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer tok")
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	for _, c := range res.Cookies() {
+		if c.Name == SessionCookieName && c.Secure {
+			t.Errorf("Secure flag set on plain-HTTP login without X-Forwarded-Proto")
+		}
+	}
+}
+
 func TestStateAPI_SessionResponseBody(t *testing.T) {
 	st, _ := store.Open(t.TempDir())
 	scheme, _ := NewSessionScheme(time.Hour)
