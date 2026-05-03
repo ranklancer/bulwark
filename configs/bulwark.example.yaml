@@ -182,8 +182,32 @@ exclude:
 api:
   enabled: true
   listen:  ":8080"
+
+  # Authentication for the state API + dashboard. Three modes:
+  #
+  #   none           anonymous; safe ONLY when bound to localhost
+  #   bearer         single shared-secret token (machine-to-machine)
+  #   forward-proxy  trust identity headers from a reverse proxy that
+  #                  terminates SSO/MFA upstream (Authelia, Authentik,
+  #                  Pomerium, oauth2-proxy, Cloudflare Access)
+  #
+  # "basic", "oidc", "saml" are NOT yet implemented — for SSO/MFA put
+  # Bulwark behind a reverse proxy that terminates auth and use
+  # forward-proxy mode. See docs/DEPLOY.md for an Authelia recipe.
   auth:
-    type: none                        # none | basic | oidc
+    type: none
+
+    # For type=bearer
+    token: "${BULWARK_API_TOKEN}"
+
+    # For type=forward-proxy. CIDRs whose connections are allowed to set
+    # identity headers — anything outside is rejected with 403 before the
+    # headers are read, neutralising header-spoofing attacks.
+    trusted_proxies:
+      - 192.0.2.0/24                  # replace with your reverse proxy's network
+    user_header:    Remote-User       # default; override if your proxy uses something else
+    groups_header:  Remote-Groups     # default
+    required_group: ""                # optional; restrict access to one group
 
   # DIUN-compatibility webhook receiver at POST /api/v1/webhooks/diun.
   # Lets users with existing DIUN deployments plug Bulwark in as the

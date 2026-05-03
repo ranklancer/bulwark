@@ -197,18 +197,48 @@ type Exclude struct {
 }
 
 type APIConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Listen  string `yaml:"listen"`
-	Auth    struct {
-		Type         string `yaml:"type"`
-		Username     string `yaml:"username"`
-		PasswordHash string `yaml:"password_hash"`
-	} `yaml:"auth"`
+	Enabled bool      `yaml:"enabled"`
+	Listen  string    `yaml:"listen"`
+	Auth    AuthConfig `yaml:"auth"`
 	// DIUN configures the DIUN-compatibility webhook receiver mounted at
 	// POST /api/v1/webhooks/diun. The endpoint is enabled whenever the
 	// API server is enabled; the Token field optionally requires a
 	// shared secret on each call.
 	DIUN APIDIUNConfig `yaml:"diun"`
+}
+
+// AuthConfig configures authentication for the state API and embedded
+// dashboard. Three types are supported:
+//
+//	none           anonymous access; safe only for localhost listeners
+//	bearer         single shared-secret token (machine-to-machine; no MFA)
+//	forward-proxy  trust identity headers from a reverse proxy that
+//	               terminates SSO/MFA upstream (Authelia, Authentik,
+//	               Pomerium, oauth2-proxy, Cloudflare Access)
+//
+// "basic", "oidc", "saml" etc. are NOT yet implemented. Setting them
+// produces a startup error pointing at forward-proxy as the recommended
+// path for SSO/MFA in homelab deployments.
+type AuthConfig struct {
+	Type string `yaml:"type"`
+
+	// Token is the shared secret for type=bearer.
+	Token string `yaml:"token"`
+
+	// TrustedProxies lists CIDR blocks (10.0.0.0/8 etc.) whose connections
+	// are allowed to set identity headers. Required for type=forward-proxy.
+	TrustedProxies []string `yaml:"trusted_proxies"`
+
+	// UserHeader / GroupsHeader are the request headers from which the
+	// authenticated user and groups are read. Defaults match the
+	// Authelia/Authentik/oauth2-proxy convention: "Remote-User" and
+	// "Remote-Groups" respectively.
+	UserHeader   string `yaml:"user_header"`
+	GroupsHeader string `yaml:"groups_header"`
+
+	// RequiredGroup, when non-empty, restricts access to users in the
+	// named group. The IdP populates GroupsHeader.
+	RequiredGroup string `yaml:"required_group"`
 }
 
 type APIDIUNConfig struct {
@@ -278,6 +308,8 @@ func Defaults() *Config {
 	c.API.Enabled = true
 	c.API.Listen = ":8080"
 	c.API.Auth.Type = "none"
+	c.API.Auth.UserHeader = "Remote-User"
+	c.API.Auth.GroupsHeader = "Remote-Groups"
 	c.Logging.Level = "info"
 	c.Logging.Format = "json"
 	return c
@@ -341,6 +373,32 @@ func (c *Config) Validate() error {
 		// ok
 	default:
 		return fmt.Errorf("snapshots.backend %q is not a recognized backend", c.Snapshots.Backend)
+	}
+	if err := c.validateAuth(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateAuth rejects misconfigured api.auth blocks at startup so users
+// don't get a silently-anonymous server when they think they've enabled
+// a real auth scheme.
+func (c *Config) validateAuth() error {
+	t := strings.ToLower(strings.TrimSpace(c.API.Auth.Type))
+	switch t {
+	case "", "none":
+		// fine — anonymous (matches the legacy default)
+	case "bearer":
+		// Token may be empty if api.diun.token is set; the Authenticator
+		// builder falls back to that. Don't require it here.
+	case "forward-proxy":
+		if len(c.API.Auth.TrustedProxies) == 0 {
+			return fmt.Errorf("api.auth.type=%q requires api.auth.trusted_proxies (CIDR list); without it every request would be rejected", t)
+		}
+	case "basic", "oidc", "saml":
+		return fmt.Errorf("api.auth.type=%q is not yet implemented; for SSO/MFA put Bulwark behind a reverse proxy that terminates auth (Authelia, Authentik, Pomerium, oauth2-proxy) and use api.auth.type=forward-proxy with the proxy's CIDR in trusted_proxies", t)
+	default:
+		return fmt.Errorf("api.auth.type=%q is not recognized; valid values: none, bearer, forward-proxy", t)
 	}
 	return nil
 }

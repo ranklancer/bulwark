@@ -300,7 +300,7 @@ func TestClearNotifications(t *testing.T) {
 
 func TestAuth_RequiredOnAllEndpoints(t *testing.T) {
 	st := stateFixture(t)
-	srv := newStateServer(t, &StateHandler{Store: st, Token: "secret"})
+	srv := newStateServer(t, &StateHandler{Store: st, Auth: BearerAuth{Token: "secret"}})
 
 	endpoints := []struct {
 		method string
@@ -340,6 +340,44 @@ func TestAuth_RequiredOnAllEndpoints(t *testing.T) {
 				t.Errorf("authed call still got 401")
 			}
 		})
+	}
+}
+
+func TestPostDecision_DecidedByFallsBackToForwardProxyIdentity(t *testing.T) {
+	st := stateFixture(t)
+	auth, err := NewForwardProxyAuth([]string{"192.0.2.0/24"}, "", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := newStateServer(t, &StateHandler{Store: st, Auth: auth})
+
+	// httptest.NewServer binds to 127.0.0.1, but the auth check runs on
+	// r.RemoteAddr. We need to fake a request from a "trusted proxy". The
+	// simplest path is to construct the request manually and dial through
+	// http.DefaultClient — but RemoteAddr is set by the server based on
+	// the actual TCP peer. To test this end-to-end we instead invoke the
+	// handler directly via httptest.NewRecorder.
+	body := `{"container":"sonarr","decision":"approved"}`
+	r, _ := http.NewRequest("POST", srv.URL+"/api/v1/queue", strings.NewReader(body))
+	r.RemoteAddr = "192.0.2.5:54321"
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Remote-User", "alice")
+	r.Header.Set("Remote-Groups", "ops")
+	w := httptest.NewRecorder()
+
+	mux := http.NewServeMux()
+	(&StateHandler{Store: st, Auth: auth}).Register(mux)
+	mux.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	got, _ := st.LookupDecision(store.ApprovalKey{ContainerID: "sonarr", RegistryDigest: "sha256:sonarrnew"})
+	if got == nil {
+		t.Fatal("decision not recorded")
+	}
+	if got.DecidedBy != "alice" {
+		t.Errorf("DecidedBy = %q, want 'alice' (from forward-proxy Remote-User)", got.DecidedBy)
 	}
 }
 

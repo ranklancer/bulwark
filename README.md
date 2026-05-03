@@ -211,7 +211,8 @@ The same scan runs in CI.
 | 5     | Pre/post/rollback update hooks                           | shipped  |
 | 6     | HTTP REST API for state inspection + decisions           | shipped  |
 | 7     | Embedded minimal web dashboard (vanilla JS)              | shipped  |
-| 8     | React/Tailwind dashboard (richer SPA on the same API)    | next     |
+| 8     | Auth: bearer + forward-proxy (Authelia/Authentik SSO+MFA)| shipped  |
+| 9     | React/Tailwind dashboard (richer SPA on the same API)    | next     |
 | 3     | Snapshot backends (ZFS, Btrfs, volume)                   | planned  |
 | 4     | Native HA persistent / SMTP / Shoutrrr notifications     | planned  |
 | 5     | Web UI, HTTP API, WebSocket                              | planned  |

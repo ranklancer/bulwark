@@ -214,7 +214,109 @@ against a throwaway test container first.
 
 ---
 
-## Step 6 — point DIUN at Bulwark (optional)
+## Step 6 — SSO + MFA via forward-proxy auth (recommended)
+
+Bulwark does **not** ship with built-in OIDC, SAML, or MFA. The homelab-
+friendly answer is to put a reverse proxy in front that terminates auth
+and forwards an `Authorization` decision to Bulwark via headers. Authelia,
+Authentik, Pomerium, oauth2-proxy, and Cloudflare Access all support this
+pattern; they all give you OIDC and SSO, and Authelia / Authentik give
+you TOTP / WebAuthn / push MFA out of the box.
+
+### Bulwark side
+
+```yaml
+# in your bulwark.yaml
+api:
+  auth:
+    type: forward-proxy
+    trusted_proxies:
+      - 192.0.2.0/24       # CIDR your reverse proxy connects from
+    user_header:    Remote-User       # what Authelia / Authentik / oauth2-proxy set
+    groups_header:  Remote-Groups
+    required_group: ops               # optional — only ops can see Bulwark
+```
+
+Requests from outside the trusted CIDR are rejected with 403 before the
+headers are even read. That's the property that makes header-spoofing
+attacks fail closed.
+
+### Authelia (Traefik forward-auth middleware)
+
+```yaml
+# Traefik labels on the Bulwark service
+- "traefik.http.routers.bulwark.middlewares=authelia@docker"
+- "traefik.http.middlewares.authelia.forwardauth.address=http://authelia:9091/api/verify?rd=https%3A%2F%2Fauth.example.com"
+- "traefik.http.middlewares.authelia.forwardauth.trustForwardHeader=true"
+- "traefik.http.middlewares.authelia.forwardauth.authResponseHeaders=Remote-User,Remote-Groups,Remote-Name,Remote-Email"
+```
+
+Then in your Authelia `configuration.yml`:
+
+```yaml
+access_control:
+  default_policy: deny
+  rules:
+    - domain: bulwark.example.com
+      policy: two_factor          # require TOTP/WebAuthn for Bulwark
+      subject: "group:ops"        # gate to a group (matches required_group)
+```
+
+### Authentik (proxy outpost)
+
+Create an "Application" with provider type "Proxy" (Forward auth single
+application). Set the External Host to `https://bulwark.example.com`. The
+outpost's Traefik integration emits the `X-Authentik-User` /
+`X-Authentik-Groups` headers — point Bulwark at them:
+
+```yaml
+# bulwark.yaml
+api:
+  auth:
+    type: forward-proxy
+    trusted_proxies:
+      - 192.0.2.0/24
+    user_header:    X-Authentik-Username
+    groups_header:  X-Authentik-Groups
+```
+
+### oauth2-proxy
+
+```yaml
+# bulwark.yaml — defaults already match oauth2-proxy
+api:
+  auth:
+    type: forward-proxy
+    trusted_proxies:
+      - 192.0.2.0/24
+    user_header:    X-Auth-Request-User
+    groups_header:  X-Auth-Request-Groups
+```
+
+`oauth2-proxy` itself is configured in front of the reverse proxy with
+your IdP of choice (Google, GitHub, Okta, Keycloak, etc.).
+
+### Audit trail
+
+When forward-proxy auth is configured, every approval recorded via
+`POST /api/v1/queue` (or the Approve / Reject buttons in the dashboard)
+captures the user from the proxy's identity header — so a
+`bulwark queue list` query later shows who approved what:
+
+```sh
+$ bulwark queue list --data-dir /opt/bulwark/data --json | jq '.[0]'
+{
+  "container": "sonarr",
+  "decision":  "approved",
+  "decided_by": "alice",       # came from Remote-User
+  "decided_at": "2026-05-02T15:30:00Z",
+  "note":       "tested in dev"
+}
+```
+
+---
+
+## Step 7 — point DIUN at Bulwark (optional)
 
 If you already run [DIUN](https://crazymax.dev/diun/), add Bulwark as a
 webhook destination so DIUN's image discovery feeds Bulwark's classifier:
@@ -231,6 +333,14 @@ notif:
 
 Bulwark logs every received webhook and runs the same dedup +
 classification + notification pipeline as the periodic scan.
+
+> The DIUN webhook uses its own `api.diun.token` (machine-to-machine
+> bearer), not `api.auth`. Server-to-server callers don't have a human
+> identity to forward — keep them on a separate shared secret. If you
+> route the DIUN webhook through the same reverse proxy that handles
+> SSO for the dashboard, exempt the `/api/v1/webhooks/diun` path from
+> the forward-auth middleware so DIUN's POSTs don't get redirected to
+> a login page.
 
 ---
 

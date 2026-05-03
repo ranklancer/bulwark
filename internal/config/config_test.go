@@ -120,6 +120,61 @@ func TestValidate_RejectsBadSnapshotBackend(t *testing.T) {
 	}
 }
 
+func TestValidate_RejectsUnimplementedAuthTypes(t *testing.T) {
+	for _, t_ := range []string{"basic", "oidc", "saml"} {
+		c := Defaults()
+		c.API.Auth.Type = t_
+		err := c.Validate()
+		if err == nil {
+			t.Errorf("expected error for auth.type=%q (unimplemented)", t_)
+			continue
+		}
+		// The error should point users at the working alternative.
+		if !strings.Contains(err.Error(), "forward-proxy") {
+			t.Errorf("auth.type=%q error should suggest forward-proxy: %v", t_, err)
+		}
+	}
+}
+
+func TestValidate_AcceptsNoneBearerForwardProxy(t *testing.T) {
+	for _, tc := range []struct {
+		typ string
+		mut func(*Config)
+	}{
+		{"none", nil},
+		{"bearer", func(c *Config) { c.API.Auth.Token = "secret" }},
+		{"forward-proxy", func(c *Config) { c.API.Auth.TrustedProxies = []string{"192.0.2.0/24"} }},
+	} {
+		c := Defaults()
+		c.API.Auth.Type = tc.typ
+		if tc.mut != nil {
+			tc.mut(c)
+		}
+		if err := c.Validate(); err != nil {
+			t.Errorf("auth.type=%q rejected: %v", tc.typ, err)
+		}
+	}
+}
+
+func TestValidate_ForwardProxyRequiresTrustedProxies(t *testing.T) {
+	c := Defaults()
+	c.API.Auth.Type = "forward-proxy"
+	// no TrustedProxies set
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "trusted_proxies") {
+		t.Errorf("forward-proxy without trusted_proxies should error and mention it: %v", err)
+	}
+}
+
+func TestValidate_RejectsUnknownAuthType(t *testing.T) {
+	c := Defaults()
+	c.API.Auth.Type = "magic-beans"
+	err := c.Validate()
+	if err == nil || !strings.Contains(err.Error(), "magic-beans") {
+		t.Errorf("expected error mentioning the bad type, got: %v", err)
+	}
+}
+
 func TestClassifierConfig_AppliesPolicyOverrides(t *testing.T) {
 	c := Defaults()
 	c.Classification.Policies.Minor = "safe" // unusual: trust minor bumps

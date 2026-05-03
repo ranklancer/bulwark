@@ -266,7 +266,11 @@ Flags:`)
 		DedupTTL:   *dedupTTL,
 		Now:        deps.Now,
 	}
-	state := &api.StateHandler{Store: st, Logger: logger, Token: *diunToken}
+	auth, err := buildAuthenticator(loaded, *diunToken, logger)
+	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
 	srv := api.NewServer(*listen, diun, state, logger)
 
 	// --- Set up parent context (signals or injected) --------------------

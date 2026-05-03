@@ -165,7 +165,11 @@ Flags:`)
 		DedupTTL:   *dedupTTL,
 	}
 
-	state := &api.StateHandler{Store: st, Logger: logger, Token: *diunToken}
+	auth, err := buildAuthenticator(loaded, *diunToken, logger)
+	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	state := &api.StateHandler{Store: st, Logger: logger, Auth: auth}
 	srv := api.NewServer(*listen, diun, state, logger)
 
 	// Production: translate SIGINT/SIGTERM into context cancellation.

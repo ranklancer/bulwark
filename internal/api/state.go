@@ -1,7 +1,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,14 +16,16 @@ import (
 // StateHandler exposes Bulwark's persistent state (scan history, approval
 // queue, notification dedup) over HTTP.
 //
-// All endpoints share the same Token (when set) — a single shared secret
-// covers the whole API. Empty Token means anonymous access; the daemon
-// logs a warning at startup when this is the case and the listener isn't
-// bound to localhost.
+// Auth is delegated to the configured Authenticator: AnonymousAuth (no
+// auth — only safe for localhost listeners), BearerAuth (single shared
+// secret), or ForwardProxyAuth (identity headers from a trusted reverse
+// proxy that terminates SSO/MFA upstream — Authelia, Authentik, etc.).
+// Nil Auth defaults to AnonymousAuth so existing tests / minimal
+// deployments still work.
 type StateHandler struct {
 	Store  *store.Store
 	Logger *slog.Logger
-	Token  string
+	Auth   Authenticator
 }
 
 // Register mounts the StateHandler routes on mux. Routes use Go 1.22's
@@ -43,24 +44,15 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/notifications", h.authed(h.clearNotifications))
 }
 
-// authed wraps an http.HandlerFunc with the same shared-secret auth check
-// used by the DIUN webhook handler. Empty Token means anonymous.
+// authed wraps a HandlerFunc with the configured Authenticator. Nil Auth
+// is treated as AnonymousAuth so unconfigured deployments behave the same
+// as they did before this refactor.
 func (h *StateHandler) authed(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if h.Token == "" {
-			next(w, r)
-			return
-		}
-		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if tok == "" {
-			tok = r.Header.Get("X-Bulwark-Token")
-		}
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(h.Token)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next(w, r)
+	auth := h.Auth
+	if auth == nil {
+		auth = AnonymousAuth{}
 	}
+	return authMiddleware(auth, next)
 }
 
 // --- /api/v1/scans -----------------------------------------------------------
@@ -205,7 +197,15 @@ func (h *StateHandler) postDecision(w http.ResponseWriter, r *http.Request) {
 		To:            match.To,
 	}
 	if rec.DecidedBy == "" {
-		rec.DecidedBy = "api"
+		// Prefer the identity surfaced by the auth middleware over the
+		// body's decided_by — when forward-proxy auth is configured, this
+		// gives us a real per-user audit trail. Falls back to "api" only
+		// for AnonymousAuth deployments.
+		if id := IdentityFromContext(r.Context()); !id.IsAnonymous() {
+			rec.DecidedBy = id.User
+		} else {
+			rec.DecidedBy = "api"
+		}
 	}
 	if err := h.Store.RecordDecision(rec); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
