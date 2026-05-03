@@ -196,6 +196,8 @@ func titleFor(e Event) string {
 		prefix = "BREAKING update blocked"
 	case types.ActionNeedsReview:
 		prefix = "Review needed"
+	case types.ActionStackSkipped:
+		prefix = "Stack-skipped"
 	}
 	if e.Synthetic {
 		prefix = "[test] " + prefix

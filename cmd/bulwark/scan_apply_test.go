@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,10 +38,19 @@ type stubUpdaterDocker struct {
 	// Once a container is started, this controls the health each
 	// inspect returns. Use docker.HealthHealthy for a successful apply.
 	startupHealth docker.HealthStatus
+
+	// pullOrder records the image references passed to PullImage in the
+	// order they arrived. Tests assert on this to verify Phase 12
+	// dependency-first ordering.
+	pullMu    sync.Mutex
+	pullOrder []string
 }
 
-func (s *stubUpdaterDocker) PullImage(_ context.Context, _ string) error {
+func (s *stubUpdaterDocker) PullImage(_ context.Context, ref string) error {
 	atomic.AddInt32(&s.pulls, 1)
+	s.pullMu.Lock()
+	s.pullOrder = append(s.pullOrder, ref)
+	s.pullMu.Unlock()
 	if s.failPull {
 		return errors.New("manifest unknown")
 	}
@@ -448,5 +458,245 @@ func TestScanApply_HealthFailureRollsBack(t *testing.T) {
 	// The notification reflects ROLLBACK action.
 	if len(rec.got) != 1 || rec.got[0].Action != types.ActionRolledBack {
 		t.Errorf("expected one ROLLBACK notification, got %+v", rec.got)
+	}
+}
+
+// composeStackFixture builds the (fakeDocker, fakeRegistry, stubUpdaterDocker)
+// triple for a given list of compose-aware container specs. Each spec is
+// (name, project, dependsOn, oldDigest, newDigest). All containers in the
+// fixture share the same stub updater, which means startupHealth applies
+// uniformly — fine for stack tests where we want the WHOLE stack to either
+// roll back together or all succeed.
+type composeSpec struct {
+	name      string
+	project   string
+	dependsOn string // raw label value, e.g. "db:service_started:true"
+	imageRef  string // e.g. "ghcr.io/owner/db:1.0"
+	imageID   string // local image id
+}
+
+func buildComposeFixture(t *testing.T, specs []composeSpec, health docker.HealthStatus) (*fakeDocker, *fakeRegistry, *stubUpdaterDocker) {
+	t.Helper()
+	containers := make([]docker.Container, 0, len(specs))
+	images := make(map[string]*docker.ImageInspect, len(specs))
+	digests := make(map[string]string, len(specs))
+	stubContainers := make(map[string]*docker.ContainerInspect, len(specs))
+	for _, sp := range specs {
+		labels := map[string]string{}
+		if sp.project != "" {
+			labels["com.docker.compose.project"] = sp.project
+			labels["com.docker.compose.service"] = sp.name
+		}
+		if sp.dependsOn != "" {
+			labels["com.docker.compose.depends_on"] = sp.dependsOn
+		}
+		oldID := "old-" + sp.name
+		containers = append(containers, docker.Container{
+			ID:      oldID,
+			Name:    sp.name,
+			Image:   sp.imageRef,
+			ImageID: sp.imageID,
+			Labels:  labels,
+		})
+		images[sp.imageID] = &docker.ImageInspect{
+			RepoDigests: []string{repoOf(sp.imageRef) + "@sha256:old-" + sp.name},
+		}
+		digests[sp.imageRef] = "sha256:new-" + sp.name
+		stubContainers[oldID] = &docker.ContainerInspect{
+			ID:              oldID,
+			Name:            "/" + sp.name,
+			ImageRef:        sp.imageRef,
+			Running:         true,
+			Health:          docker.HealthNone,
+			Config:          json.RawMessage(`{"Image":"` + sp.imageRef + `"}`),
+			HostConfig:      json.RawMessage(`{}`),
+			NetworkSettings: json.RawMessage(`{"Networks":{}}`),
+		}
+	}
+	return &fakeDocker{containers: containers, images: images},
+		&fakeRegistry{digests: digests},
+		&stubUpdaterDocker{startupHealth: health, containers: stubContainers}
+}
+
+// repoOf strips ":<tag>" off an image reference, leaving the repository
+// portion that DigestFor matches against.
+func repoOf(ref string) string {
+	for i := len(ref) - 1; i >= 0; i-- {
+		switch ref[i] {
+		case ':':
+			return ref[:i]
+		case '/':
+			return ref
+		}
+	}
+	return ref
+}
+
+func TestScanApply_ComposeStack_AppliesDepsBeforeDependents(t *testing.T) {
+	// web depends_on db. Both have a SAFE update available. Apply must
+	// pull db before web — this is the user-visible Phase 12 contract.
+	st, _ := store.Open(t.TempDir())
+	rec := &recordingNotifier{name: "test", min: types.RiskSafe}
+
+	fd, fr, stubDoc := buildComposeFixture(t, []composeSpec{
+		{name: "web", project: "demo", dependsOn: "db:service_started:true",
+			imageRef: "ghcr.io/owner/web:1.0", imageID: "sha256:l-web"},
+		{name: "db", project: "demo", dependsOn: "",
+			imageRef: "ghcr.io/owner/db:1.0", imageID: "sha256:l-db"},
+	}, docker.HealthHealthy)
+
+	upd := &updater.Updater{
+		Docker:         stubDoc,
+		HealthTimeout:  100 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		StartupGrace:   1 * time.Millisecond,
+	}
+	deps := scanDeps{
+		Docker:    fd,
+		Registry:  fr,
+		Notifiers: []notifier.Notifier{rec},
+		Store:     st,
+		Updater:   upd,
+		Now:       func() time.Time { return time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC) },
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdScanWith(
+		[]string{"--no-fetch-notes", "--no-color", "--notify", "--apply"},
+		&stdout, &stderr, deps,
+	); err != nil {
+		t.Fatalf("scan: %v\nstderr: %s", err, stderr.String())
+	}
+
+	stubDoc.pullMu.Lock()
+	order := append([]string(nil), stubDoc.pullOrder...)
+	stubDoc.pullMu.Unlock()
+	if len(order) != 2 {
+		t.Fatalf("pull order = %v, want 2 entries", order)
+	}
+	if order[0] != "ghcr.io/owner/db:1.0" || order[1] != "ghcr.io/owner/web:1.0" {
+		t.Errorf("dependency-first violated: pull order = %v", order)
+	}
+}
+
+func TestScanApply_ComposeStack_StopsOnFailure_PeerStackSkipped(t *testing.T) {
+	// db rolls back due to unhealthy startup; web depends_on db so it
+	// MUST NOT be applied — pulls should be 1 (only db). The web event
+	// in the dispatched notifications carries Action=ActionStackSkipped.
+	st, _ := store.Open(t.TempDir())
+	rec := &recordingNotifier{name: "test", min: types.RiskSafe}
+
+	fd, fr, stubDoc := buildComposeFixture(t, []composeSpec{
+		{name: "db", project: "demo", dependsOn: "",
+			imageRef: "ghcr.io/owner/db:1.0", imageID: "sha256:l-db"},
+		{name: "web", project: "demo", dependsOn: "db:service_started:true",
+			imageRef: "ghcr.io/owner/web:1.0", imageID: "sha256:l-web"},
+	}, docker.HealthUnhealthy)
+
+	upd := &updater.Updater{
+		Docker:         stubDoc,
+		HealthTimeout:  100 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		StartupGrace:   1 * time.Millisecond,
+	}
+	deps := scanDeps{
+		Docker:    fd,
+		Registry:  fr,
+		Notifiers: []notifier.Notifier{rec},
+		Store:     st,
+		Updater:   upd,
+		Now:       func() time.Time { return time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC) },
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdScanWith(
+		[]string{"--no-fetch-notes", "--no-color", "--notify", "--apply"},
+		&stdout, &stderr, deps,
+	); err != nil {
+		t.Fatalf("scan: %v\nstderr: %s", err, stderr.String())
+	}
+
+	if got := atomic.LoadInt32(&stubDoc.pulls); got != 1 {
+		t.Errorf("only the failing dep should be pulled; pulls = %d, want 1", got)
+	}
+
+	var webEvent *notifier.Event
+	for i := range rec.got {
+		if rec.got[i].Container == "web" {
+			webEvent = &rec.got[i]
+			break
+		}
+	}
+	if webEvent == nil {
+		t.Fatalf("expected a notification for web; got %+v", rec.got)
+	}
+	if webEvent.Action != types.ActionStackSkipped {
+		t.Errorf("web event Action = %v, want ActionStackSkipped", webEvent.Action)
+	}
+
+	// Audit log carries an apply.stack_skipped row for web.
+	events, _ := st.ReadAudit(0)
+	var skipped *store.AuditEvent
+	for i := range events {
+		if events[i].Action == store.ActionStackSkipped && events[i].Container == "web" {
+			skipped = &events[i]
+			break
+		}
+	}
+	if skipped == nil {
+		t.Fatalf("expected stack_skipped audit row for web; got %+v", events)
+	}
+	if skipped.Detail == "" {
+		t.Errorf("audit Detail should explain the peer + project; got empty")
+	}
+}
+
+func TestScanApply_ComposeStack_FailureDoesNotBlockOtherStacks(t *testing.T) {
+	// Two stacks. demo's db rolls back → web is stack-skipped. The OTHER
+	// stack's standalone-style container (project=other) must still be
+	// pulled — cross-stack failures are independent.
+	st, _ := store.Open(t.TempDir())
+	rec := &recordingNotifier{name: "test", min: types.RiskSafe}
+
+	fd, fr, stubDoc := buildComposeFixture(t, []composeSpec{
+		{name: "db", project: "demo", dependsOn: "",
+			imageRef: "ghcr.io/owner/db:1.0", imageID: "sha256:l-db"},
+		{name: "web", project: "demo", dependsOn: "db:service_started:true",
+			imageRef: "ghcr.io/owner/web:1.0", imageID: "sha256:l-web"},
+		{name: "queue", project: "other", dependsOn: "",
+			imageRef: "ghcr.io/owner/queue:1.0", imageID: "sha256:l-queue"},
+	}, docker.HealthUnhealthy)
+
+	upd := &updater.Updater{
+		Docker:         stubDoc,
+		HealthTimeout:  100 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		StartupGrace:   1 * time.Millisecond,
+	}
+	deps := scanDeps{
+		Docker:    fd,
+		Registry:  fr,
+		Notifiers: []notifier.Notifier{rec},
+		Store:     st,
+		Updater:   upd,
+		Now:       func() time.Time { return time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC) },
+	}
+	var stdout, stderr bytes.Buffer
+	if err := cmdScanWith(
+		[]string{"--no-fetch-notes", "--no-color", "--notify", "--apply"},
+		&stdout, &stderr, deps,
+	); err != nil {
+		t.Fatalf("scan: %v\nstderr: %s", err, stderr.String())
+	}
+
+	// db pulled; queue pulled (different stack, not blocked); web NOT pulled.
+	if got := atomic.LoadInt32(&stubDoc.pulls); got != 2 {
+		t.Errorf("cross-stack independence violated; pulls = %d, want 2", got)
+	}
+	stubDoc.pullMu.Lock()
+	pulled := append([]string(nil), stubDoc.pullOrder...)
+	stubDoc.pullMu.Unlock()
+	for _, ref := range pulled {
+		if ref == "ghcr.io/owner/web:1.0" {
+			t.Errorf("web should have been stack-skipped; pulled %v", pulled)
+		}
 	}
 }

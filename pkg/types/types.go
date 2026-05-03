@@ -271,6 +271,7 @@ const (
 	ActionBlocked
 	ActionRolledBack
 	ActionSkipped
+	ActionStackSkipped
 )
 
 func (a UpdateAction) String() string {
@@ -285,6 +286,8 @@ func (a UpdateAction) String() string {
 		return "rolled-back"
 	case ActionSkipped:
 		return "skipped"
+	case ActionStackSkipped:
+		return "stack-skipped"
 	default:
 		return "unknown"
 	}
