@@ -315,6 +315,117 @@ func TestStateAPI_SessionLogout(t *testing.T) {
 	res.Body.Close()
 }
 
+// TestStateAPI_GetSessionProbe asserts the SPA's session probe:
+//   - 200 + body{authenticated, session_endpoints_enabled} when authed
+//   - session_endpoints_enabled=false in anonymous mode
+//   - 401 when bearer auth is configured and missing
+func TestStateAPI_GetSessionProbe(t *testing.T) {
+	t.Run("authed with bearer", func(t *testing.T) {
+		st, _ := store.Open(t.TempDir())
+		bearer := BearerAuth{Token: "tok"}
+		h := &StateHandler{Store: st, Auth: bearer, SessionInnerAuth: bearer}
+		mux := http.NewServeMux()
+		h.Register(mux)
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/sessions", nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d", res.StatusCode)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["authenticated"] != true {
+			t.Errorf("body[authenticated] = %v, want true", body["authenticated"])
+		}
+		if body["session_endpoints_enabled"] != false {
+			t.Errorf("body[session_endpoints_enabled] = %v, want false (Sessions nil)",
+				body["session_endpoints_enabled"])
+		}
+	})
+
+	t.Run("authed with sessions enabled", func(t *testing.T) {
+		st, _ := store.Open(t.TempDir())
+		scheme, _ := NewSessionScheme(time.Hour)
+		bearer := BearerAuth{Token: "tok"}
+		h := &StateHandler{
+			Store:            st,
+			Auth:             CookieOrInnerAuth{Inner: bearer, Sessions: scheme},
+			Sessions:         scheme,
+			SessionInnerAuth: bearer,
+		}
+		mux := http.NewServeMux()
+		h.Register(mux)
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		req, _ := http.NewRequest("GET", srv.URL+"/api/v1/sessions", nil)
+		req.Header.Set("Authorization", "Bearer tok")
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		if body["session_endpoints_enabled"] != true {
+			t.Errorf("body[session_endpoints_enabled] = %v, want true",
+				body["session_endpoints_enabled"])
+		}
+	})
+
+	t.Run("unauthed returns 401", func(t *testing.T) {
+		st, _ := store.Open(t.TempDir())
+		bearer := BearerAuth{Token: "tok"}
+		h := &StateHandler{Store: st, Auth: bearer, SessionInnerAuth: bearer}
+		mux := http.NewServeMux()
+		h.Register(mux)
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		res, err := http.Get(srv.URL + "/api/v1/sessions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != http.StatusUnauthorized {
+			t.Errorf("anonymous probe = %d, want 401", res.StatusCode)
+		}
+	})
+
+	t.Run("anonymous mode returns 200 with disabled session endpoints", func(t *testing.T) {
+		st, _ := store.Open(t.TempDir())
+		h := &StateHandler{Store: st, Auth: AnonymousAuth{}}
+		mux := http.NewServeMux()
+		h.Register(mux)
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		res, err := http.Get(srv.URL + "/api/v1/sessions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		if res.StatusCode != http.StatusOK {
+			t.Errorf("anonymous probe = %d, want 200", res.StatusCode)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(res.Body).Decode(&body)
+		if body["session_endpoints_enabled"] != false {
+			t.Errorf("anonymous-mode body[session_endpoints_enabled] = %v, want false",
+				body["session_endpoints_enabled"])
+		}
+	})
+}
+
 func TestStateAPI_SessionResponseBody(t *testing.T) {
 	st, _ := store.Open(t.TempDir())
 	scheme, _ := NewSessionScheme(time.Hour)

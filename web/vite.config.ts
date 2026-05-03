@@ -21,7 +21,13 @@ export default defineConfig({
   },
   build: {
     outDir: path.resolve(__dirname, "../internal/api/ui-react/dist"),
-    emptyOutDir: true,
+    // Don't empty the outDir — that wipes the committed placeholder
+    // index.html + .gitignore. Stale hashed-asset files accumulate
+    // locally, but assets/ is gitignored so they don't reach commits;
+    // CI does a fresh checkout each run so accumulation is bounded
+    // there too. The prebuild npm script clears assets/ before each
+    // build to keep local dist/ tidy.
+    emptyOutDir: false,
     sourcemap: false,
   },
 });

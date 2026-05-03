@@ -74,6 +74,12 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/v1/queue/{container}", h.authed(h.csrfProtect(h.forgetDecision)))
 	mux.HandleFunc("GET /api/v1/notifications", h.authed(h.listNotifications))
 	mux.HandleFunc("DELETE /api/v1/notifications", h.authed(h.csrfProtect(h.clearNotifications)))
+	// GET is always mounted so an anonymous-mode deployment can answer
+	// the SPA's "am I logged in?" probe with the same shape as
+	// session-enabled deployments. The response body's
+	// session_endpoints_enabled flag tells the dashboard whether to
+	// render the logout button + login page at all.
+	mux.HandleFunc("GET /api/v1/sessions", h.authed(h.getSession))
 	if h.Sessions != nil {
 		// POST uses the *bare* inner Authenticator (typically Bearer)
 		// so a cookie can't refresh itself indefinitely — only the
@@ -402,6 +408,18 @@ func errEnvelope(err error) map[string]any {
 }
 
 // --- /api/v1/sessions --------------------------------------------------------
+
+// getSession is the dashboard's "am I logged in?" probe. The handler
+// only fires when h.authed() let the request through, so reaching here
+// already means authenticated — the body just answers the secondary
+// question of whether session-cookie endpoints (POST/DELETE) are
+// usable. The SPA hides login/logout UX when they're not.
+func (h *StateHandler) getSession(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated":             true,
+		"session_endpoints_enabled": h.Sessions != nil,
+	})
+}
 
 // postSession validates the bootstrap credential (typically Bearer)
 // and issues a fresh session cookie. Bearer tokens still work as
