@@ -73,8 +73,40 @@ export interface AuditEvent {
 }
 
 export interface NotifierEntry {
+  id?: string;
+  source: "yaml" | "ui";
   name: string;
   min_level: string;
+}
+
+export type NotifierKind =
+  | "slack"
+  | "discord"
+  | "teams"
+  | "smtp"
+  | "homeassistant";
+
+export interface NotifierCreateRequest {
+  name: string;
+  kind: NotifierKind;
+  min_level?: string;
+  enabled: boolean;
+  slack?: { webhook_url: string; channel?: string };
+  discord?: { webhook_url: string };
+  teams?: { webhook_url: string };
+  smtp?: {
+    host: string;
+    port: number;
+    username?: string;
+    password?: string;
+    from: string;
+    to: string[];
+    tls?: boolean;
+  };
+  homeassistant?: {
+    url: string;
+    token: string;
+  };
 }
 
 export interface SnapshotEntry {

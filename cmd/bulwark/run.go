@@ -16,6 +16,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/configstore"
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
@@ -179,6 +180,11 @@ Flags:`)
 	}
 
 	// --- Notifier dispatcher --------------------------------------------
+	// Two halves: yaml-defined notifiers (loaded once at startup; immutable
+	// until restart) and UI-defined notifiers (mutable at runtime via the
+	// dashboard + persisted to an encrypted configstore). The Registry
+	// merges both, exposes a hot-swappable Dispatcher, and is reloaded on
+	// SIGHUP so add/edit/delete from the UI takes effect without restart.
 	notifiers := deps.Notifiers
 	if notifiers == nil {
 		built, err := notifier.FromConfig(loaded)
@@ -187,7 +193,20 @@ Flags:`)
 		}
 		notifiers = built
 	}
-	dispatcher := notifier.NewDispatcher(notifiers, logger, 30*time.Second)
+	var configStore *configstore.Store
+	if *dataDir != "" {
+		cs, err := configstore.Open(*dataDir)
+		if err != nil {
+			logger.Warn("run: configstore unavailable — UI-driven notifier config disabled", "err", err)
+		} else {
+			configStore = cs
+		}
+	}
+	notifierRegistry, err := notifier.NewRegistry(notifiers, configStore, logger, 30*time.Second)
+	if err != nil {
+		return fmt.Errorf("run: build notifier registry: %w", err)
+	}
+	dispatcher := notifierRegistry.Dispatcher()
 
 	// Live-events bus for the dashboard's SSE stream.
 	eventBus := api.NewEventBus()
@@ -261,7 +280,7 @@ Flags:`)
 		}
 		cycle, err := runScanCycle(ctx, scanCycleConfig{
 			Scanner:            scn,
-			Dispatcher:         dispatcher,
+			Dispatcher:         notifierRegistry.Dispatcher(),
 			Store:              st,
 			DedupTTL:           *dedupTTL,
 			Updater:            upd,
@@ -342,6 +361,7 @@ Flags:`)
 		SessionInnerAuth: auth, // bare; cookie can't renew itself
 		TriggerScan:      scanJob, // POST /api/v1/scans queue-jumps the next periodic firing
 		Dispatcher:       dispatcher,
+		Registry:         notifierRegistry,
 		LoadedConfig:     loaded,
 		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
 		Events:           eventBus,
@@ -357,6 +377,28 @@ Flags:`)
 		ctx, stop = signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	}
 	defer stop()
+
+	// SIGHUP triggers a reload of UI-managed notifier config (and, in
+	// later phases, other UI-mutable sections of the config store).
+	// Yaml-only sections require a restart by design — the SIGHUP path
+	// deliberately doesn't re-read the YAML.
+	hupCh := make(chan os.Signal, 1)
+	signal.Notify(hupCh, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				signal.Stop(hupCh)
+				return
+			case <-hupCh:
+				if err := notifierRegistry.Reload(); err != nil {
+					logger.Warn("run: notifier registry reload failed", "err", err)
+				} else {
+					logger.Info("run: notifier registry reloaded on SIGHUP")
+				}
+			}
+		}
+	}()
 
 	var cronSchedule *scheduler.CronSchedule
 	if *scanCron != "" {

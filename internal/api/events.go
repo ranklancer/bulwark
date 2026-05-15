@@ -20,6 +20,7 @@ const (
 	EventApplyRolledBack      = "apply.rolled_back"
 	EventApplyStackSkipped    = "apply.stack_skipped"
 	EventNotificationsCleared = "notifications.cleared"
+	EventNotifierConfig       = "notifier.config_changed"
 )
 
 // Event is one item streamed to subscribed dashboard clients. Time is

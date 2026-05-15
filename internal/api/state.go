@@ -63,7 +63,19 @@ type StateHandler struct {
 	// channels via GET /api/v1/notifiers and the synthetic-event
 	// "send a test" endpoint at POST /api/v1/notifiers/{name}/test.
 	// nil omits both routes.
+	//
+	// When Registry is also set, the daemon uses Registry as the
+	// source of truth (it carries source-of-config metadata + a
+	// SIGHUP-driven reload loop). Dispatcher is then derived from
+	// the Registry's current snapshot and kept in sync automatically.
 	Dispatcher *notifier.Dispatcher
+
+	// Registry, when set, replaces Dispatcher as the source of truth
+	// for the notifier set. The dashboard's POST/DELETE
+	// /api/v1/notifiers endpoints mutate the underlying configstore
+	// and trigger a registry reload. nil leaves notifier config
+	// strictly yaml-driven (legacy / GitOps deployments).
+	Registry *notifier.Registry
 
 	// LoadedConfig, when set, is exposed (with secrets redacted) via
 	// GET /api/v1/config and feeds the GET /api/v1/policies effective-
@@ -126,6 +138,14 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 		mux.HandleFunc("POST /api/v1/notifiers/{name}/test",
 			h.authed(h.csrfProtect(h.testNotifier)))
 	}
+	if h.Registry != nil {
+		// UI-managed notifier CRUD. Yaml-defined notifiers surface in
+		// listNotifiers as read-only "managed by YAML" cards; these
+		// routes write to the encrypted configstore + reload.
+		mux.HandleFunc("POST /api/v1/notifiers", h.authed(h.csrfProtect(h.createNotifier)))
+		mux.HandleFunc("DELETE /api/v1/notifiers/{id}", h.authed(h.csrfProtect(h.deleteNotifier)))
+		mux.HandleFunc("POST /api/v1/notifiers/test", h.authed(h.csrfProtect(h.testEphemeralNotifier)))
+	}
 	if h.LoadedConfig != nil {
 		mux.HandleFunc("GET /api/v1/config", h.authed(h.getConfig))
 		mux.HandleFunc("GET /api/v1/policies", h.authed(h.getPolicies))
@@ -136,6 +156,17 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	if h.Events != nil {
 		mux.HandleFunc("GET /api/v1/events", h.authed(streamHandler(h.Events)))
 	}
+}
+
+// currentDispatcher returns the live notifier Dispatcher. When a
+// Registry is wired the Dispatcher is read fresh on each call so a
+// SIGHUP-triggered reload propagates to callers immediately; otherwise
+// the legacy h.Dispatcher field is used (yaml-only deployments).
+func (h *StateHandler) currentDispatcher() *notifier.Dispatcher {
+	if h.Registry != nil {
+		return h.Registry.Dispatcher()
+	}
+	return h.Dispatcher
 }
 
 // csrfProtect wraps a handler with CSRF defense, using the configured
@@ -550,15 +581,35 @@ func (h *StateHandler) listContainers(w http.ResponseWriter, _ *http.Request) {
 // --- /api/v1/notifiers -------------------------------------------------------
 
 type notifierView struct {
+	ID       string `json:"id,omitempty"`
+	Source   string `json:"source"`
 	Name     string `json:"name"`
 	MinLevel string `json:"min_level"`
 }
 
 func (h *StateHandler) listNotifiers(w http.ResponseWriter, _ *http.Request) {
+	// Prefer the Registry when wired (it carries source-of-config
+	// metadata so the dashboard can render UI-managed entries with
+	// edit/delete buttons and yaml ones as read-only cards).
+	if h.Registry != nil {
+		entries := h.Registry.Entries()
+		out := make([]notifierView, 0, len(entries))
+		for _, e := range entries {
+			out = append(out, notifierView{
+				ID:       e.ID,
+				Source:   string(e.Source),
+				Name:     e.Notifier.Name(),
+				MinLevel: e.Notifier.MinLevel().String(),
+			})
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
 	notifs := h.Dispatcher.Notifiers()
 	out := make([]notifierView, 0, len(notifs))
 	for _, n := range notifs {
 		out = append(out, notifierView{
+			Source:   string(notifier.SourceYAML),
 			Name:     n.Name(),
 			MinLevel: n.MinLevel().String(),
 		})
@@ -661,7 +712,7 @@ func (h *StateHandler) testNotifier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var target notifier.Notifier
-	for _, n := range h.Dispatcher.Notifiers() {
+	for _, n := range h.currentDispatcher().Notifiers() {
 		if n.Name() == name {
 			target = n
 			break

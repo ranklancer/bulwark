@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, apiJson } from "./api";
-import type { AuditEvent, ContainerEntry, NotifierEntry, QueueRow, ScanRecord, SnapshotEntry } from "./types";
+import type {
+  AuditEvent,
+  ContainerEntry,
+  NotifierCreateRequest,
+  NotifierEntry,
+  QueueRow,
+  ScanRecord,
+  SnapshotEntry,
+} from "./types";
 
 interface AsyncResource<T> {
   data: T | null;
@@ -180,6 +188,120 @@ export function useSnapshots(target: string) {
   }, [refresh]);
 
   return { data, loading, error, refresh };
+}
+
+/**
+ * useCreateNotifier wraps POST /api/v1/notifiers. The server validates
+ * the per-kind required fields and returns 400 with a human-readable
+ * message on rejection (URL malformed, missing webhook, etc.); the
+ * caller renders the message inline below the form.
+ */
+export function useCreateNotifier() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const create = useCallback(async (req: NotifierCreateRequest): Promise<NotifierEntry> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api("/notifiers", {
+        method: "POST",
+        body: JSON.stringify(req),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(extractError(body, res.status));
+      }
+      return (await res.json()) as NotifierEntry;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return { create, busy, error };
+}
+
+/**
+ * useDeleteNotifier wraps DELETE /api/v1/notifiers/{id}. Yaml-defined
+ * notifiers are not deletable via the dashboard (operator edits the
+ * yaml and restarts); the UI hides the delete button for source=yaml
+ * cards.
+ */
+export function useDeleteNotifier() {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const remove = useCallback(async (id: string) => {
+    setBusy(id);
+    setError(null);
+    try {
+      const res = await api(`/notifiers/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(extractError(body, res.status));
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      throw err;
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  return { remove, busy, error };
+}
+
+/**
+ * useTestEphemeralNotifier wraps POST /api/v1/notifiers/test. Lets the
+ * operator confirm a webhook works before saving the config: the
+ * daemon builds an in-memory notifier from the request body, dispatches
+ * a synthetic event, then drops it.
+ */
+export function useTestEphemeralNotifier() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  const send = useCallback(async (req: NotifierCreateRequest) => {
+    setBusy(true);
+    setError(null);
+    setOk(false);
+    try {
+      const res = await api("/notifiers/test", {
+        method: "POST",
+        body: JSON.stringify(req),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(extractError(body, res.status));
+      }
+      setOk(true);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return { send, busy, error, ok };
+}
+
+function extractError(body: string, fallbackStatus: number): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: string };
+    if (parsed.error) return parsed.error;
+  } catch {
+    /* not JSON */
+  }
+  return `HTTP ${fallbackStatus}: ${body || "request failed"}`;
 }
 
 export function useTestNotifier() {
