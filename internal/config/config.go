@@ -120,6 +120,28 @@ type SnapshotsConfig struct {
 		Repository   string `yaml:"repository"`
 		PasswordFile string `yaml:"password_file"`
 	} `yaml:"restic"`
+	Proxmox struct {
+		// URL is the Proxmox VE API base, e.g. "https://pve.local:8006".
+		URL string `yaml:"url"`
+		// Token is the full PVE API token in the format
+		// "user@realm!tokenid=secret". Use ${ENV_VAR} substitution so the
+		// secret never appears in the yaml file directly.
+		Token string `yaml:"token"`
+		// Node is the cluster node name the target VM/LXC runs on
+		// (e.g. "pve01"). Required because the snapshot API is per-node.
+		Node string `yaml:"node"`
+		// VMID is the numeric id of the VM or LXC Bulwark snapshots
+		// before each apply. Typically the VM/LXC bulwark itself runs in.
+		VMID int `yaml:"vmid"`
+		// Kind is "qemu" (default) or "lxc". Determines whether the API
+		// path is /nodes/{node}/qemu/... or /nodes/{node}/lxc/...
+		Kind string `yaml:"kind"`
+		// InsecureTLS skips TLS verification of the PVE certificate.
+		// Default false; flip true for self-signed homelab installs
+		// where you can't easily add the PVE CA to the daemon's trust
+		// store.
+		InsecureTLS bool `yaml:"insecure_tls"`
+	} `yaml:"proxmox"`
 	Retention struct {
 		KeepLast int `yaml:"keep_last"`
 		KeepDays int `yaml:"keep_days"`

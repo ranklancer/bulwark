@@ -179,6 +179,10 @@ func suggestedBackend(p Platform, caps []Capability) string {
 		// Almost certainly ZFS even when the module probe missed
 		// (TrueNAS containerized sandbox, etc.). Fall back to zfs.
 		return "zfs"
+	case PlatformProxmox:
+		// Proxmox without ZFS still has a perfectly good per-VM
+		// snapshot API. Suggest it as the next-best option.
+		return "proxmox"
 	}
 	if hasCap(CapBtrfs) {
 		return "btrfs"

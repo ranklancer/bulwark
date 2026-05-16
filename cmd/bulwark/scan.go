@@ -280,6 +280,23 @@ func buildSnapshotBackend(loaded *config.Config, logger *slog.Logger) snapshot.B
 			return nil
 		}
 		b = snapshot.NewRestic(repo, pw, nil)
+	case "proxmox":
+		// Proxmox VE API backend. Validates url/token/node/vmid up
+		// front so a misconfig produces a clear startup warning, not
+		// a runtime failure mid-apply.
+		px, err := snapshot.NewProxmox(snapshot.ProxmoxConfig{
+			URL:         loaded.Snapshots.Proxmox.URL,
+			Token:       loaded.Snapshots.Proxmox.Token,
+			Node:        loaded.Snapshots.Proxmox.Node,
+			VMID:        loaded.Snapshots.Proxmox.VMID,
+			Kind:        snapshot.ProxmoxKind(loaded.Snapshots.Proxmox.Kind),
+			InsecureTLS: loaded.Snapshots.Proxmox.InsecureTLS,
+		})
+		if err != nil {
+			logger.Warn("snapshots: proxmox misconfigured; running without snapshots", "err", err)
+			return nil
+		}
+		b = px
 	default:
 		built, err := snapshot.New(name)
 		if err != nil {

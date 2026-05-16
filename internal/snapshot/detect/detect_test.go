@@ -61,8 +61,8 @@ func TestDetectFS_ProxmoxWithoutZFS(t *testing.T) {
 	if got.Platform != PlatformProxmox {
 		t.Errorf("platform = %q, want proxmox", got.Platform)
 	}
-	if got.SuggestedBackend != "" {
-		t.Errorf("suggested backend = %q, want empty (proxmox API backend not yet implemented as a fallback)", got.SuggestedBackend)
+	if got.SuggestedBackend != "proxmox" {
+		t.Errorf("suggested backend = %q, want proxmox", got.SuggestedBackend)
 	}
 }
 
