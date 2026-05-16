@@ -42,6 +42,10 @@ type scanCycleConfig struct {
 	// bus, no SSE endpoint — same as a deployment that hasn't yet
 	// had Phase 16f wired into its run.go).
 	Events *api.EventBus
+	// SnapshotOverrides is the per-container UI-set override lookup
+	// used by the apply pipeline. nil-safe; a daemon without a
+	// configstore falls back to label-driven precedence.
+	SnapshotOverrides snapshotOverrideLookup
 	Now    func() time.Time // injected for deterministic tests
 	Logger *slog.Logger
 	All    bool // include stopped containers
@@ -109,7 +113,7 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 			// "Auto-updated" framing operators expect to inspect.
 			res.Applies = applyEligibleDryRun(results, cfg.Store, logger)
 		} else {
-			res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, cfg.Events, logger)
+			res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, cfg.Events, logger, cfg.SnapshotOverrides)
 		}
 	}
 

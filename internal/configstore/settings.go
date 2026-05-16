@@ -78,10 +78,10 @@ type SettingsSection struct {
 // effect on the next daemon start; the dashboard surfaces this clearly
 // so operators know what to expect. classification reloads live
 // because scanCycleConfig is rebuilt from the merged config per scan;
-// schedule.check requires restart because the cron scheduler is built
-// once at startup.
+// schedule reloads live because the scheduler exposes SetCron and the
+// ReloadConfig hook calls it when this section is PATCHed.
 var SettingsSections = []SettingsSection{
-	{Name: "schedule", RestartRequired: true},
+	{Name: "schedule", RestartRequired: false},
 	{Name: "classification", RestartRequired: false},
 }
 

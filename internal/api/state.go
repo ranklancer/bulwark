@@ -156,6 +156,14 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("GET /api/v1/audit", h.authed(h.listAudit))
 	mux.HandleFunc("GET /api/v1/containers", h.authed(h.listContainers))
+	if h.ConfigStore != nil {
+		// Per-container UI-driven overrides (snapshot_auto /
+		// snapshot_dataset today). Persists to the encrypted store
+		// and takes effect at the next apply cycle.
+		mux.HandleFunc("GET /api/v1/containers/settings", h.authed(h.listContainerSettings))
+		mux.HandleFunc("PUT /api/v1/containers/{name}/settings", h.authed(h.csrfProtect(h.putContainerSettings)))
+		mux.HandleFunc("DELETE /api/v1/containers/{name}/settings", h.authed(h.csrfProtect(h.deleteContainerSettings)))
+	}
 	if h.Dispatcher != nil {
 		mux.HandleFunc("GET /api/v1/notifiers", h.authed(h.listNotifiers))
 		mux.HandleFunc("POST /api/v1/notifiers/{name}/test",

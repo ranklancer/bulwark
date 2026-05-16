@@ -4,29 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/api"
+	"github.com/bulwark-docker/bulwark/internal/configstore"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
-
-// parseAutoSnapshotLabel returns true when the value is a truthy
-// representation of "auto-snapshot is enabled". Mirrors the kept-in-
-// sync helper in internal/docker/labels.go without dragging that
-// package's parser through a wider rename. The accepted set
-// ("1"/"true"/"yes"/"on", case-insensitive) matches Docker label
-// conventions.
-func parseAutoSnapshotLabel(v string) bool {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "1", "true", "yes", "on":
-		return true
-	}
-	return false
-}
 
 // applyOutcome records the result of a single auto-apply attempt. It's
 // keyed by container name in applyEligibleUpdates' returned map.
@@ -39,6 +25,12 @@ type applyOutcome struct {
 	NewImage     string
 	OldImage     string
 }
+
+// snapshotOverrideLookup yields the per-container override for the
+// given container name. nil-safe: a daemon running without a
+// configstore returns a zero override and the apply pipeline falls
+// back to label-driven precedence.
+type snapshotOverrideLookup func(name string) configstore.ContainerOverride
 
 // applyEligibleUpdates walks scan results and runs the updater for those
 // that qualify for auto-apply.
@@ -53,7 +45,7 @@ type applyOutcome struct {
 //
 // Returns a map keyed by container name. Containers without an outcome key
 // were not considered eligible.
-func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *updater.Updater, st *store.Store, bus *api.EventBus, logger *slog.Logger) map[string]applyOutcome {
+func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *updater.Updater, st *store.Store, bus *api.EventBus, logger *slog.Logger, overrides snapshotOverrideLookup) map[string]applyOutcome {
 	if u == nil {
 		return nil
 	}
@@ -112,17 +104,20 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 			}
 		}
 		opts := updater.ApplyOptions{}
-		// The bulwark.snapshot.dataset label tells us which filesystem
-		// path/dataset to snapshot. Without a label the snapshot step is
-		// skipped — only container-level rollback applies.
-		//
-		// bulwark.snapshot.auto opts in to auto-inference from the
-		// container's bind mounts against the host mount table; explicit
-		// dataset always wins.
-		if ds := r.Container.Labels["bulwark.snapshot.dataset"]; ds != "" {
-			opts.SnapshotTarget = ds
+		// Snapshot precedence: a UI-set override (configstore) wins over
+		// container labels. Within each tier, explicit dataset wins over
+		// "auto-infer" so an operator can pin a specific dataset even
+		// when the host mount table is misleading.
+		var override configstore.ContainerOverride
+		if overrides != nil {
+			override = overrides(r.Container.Name)
+		}
+		plan := configstore.ComputeEffectiveSnapshot(r.Container.Labels, override)
+		switch {
+		case plan.Dataset != "":
+			opts.SnapshotTarget = plan.Dataset
 			opts.SnapshotLabel = r.Container.Name
-		} else if parseAutoSnapshotLabel(r.Container.Labels["bulwark.snapshot.auto"]) {
+		case plan.Auto:
 			opts.SnapshotAutoInfer = true
 			opts.SnapshotLabel = r.Container.Name
 		}

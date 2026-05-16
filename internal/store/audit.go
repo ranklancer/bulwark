@@ -49,7 +49,8 @@ const (
 	ActionNotifierCreated  = "notifier.created"
 	ActionNotifierUpdated  = "notifier.updated"
 	ActionNotifierDeleted  = "notifier.deleted"
-	ActionConfigUpdated    = "config.updated"
+	ActionConfigUpdated     = "config.updated"
+	ActionContainerSettings = "container.settings"
 )
 
 // auditPath is where the JSONL log lives.

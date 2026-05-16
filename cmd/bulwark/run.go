@@ -300,6 +300,17 @@ Flags:`)
 			Config:      effective,
 			Concurrency: *concurrency,
 		}
+		// snapshotOverrides lets the apply pipeline read per-container
+		// UI overrides from the configstore. A nil configstore yields
+		// a nil lookup; ComputeEffectiveSnapshot then falls back to
+		// labels.
+		var overrides snapshotOverrideLookup
+		if configStore != nil {
+			overrides = func(name string) configstore.ContainerOverride {
+				o, _ := configStore.ContainerOverride(name)
+				return o
+			}
+		}
 		cycle, err := runScanCycle(ctx, scanCycleConfig{
 			Scanner:            scn,
 			Dispatcher:         notifierRegistry.Dispatcher(),
@@ -311,6 +322,7 @@ Flags:`)
 			MaintenanceWindows: parseMaintenanceWindows(effective, logger),
 			DigestBuffer:       digestBuf,
 			Events:             eventBus,
+			SnapshotOverrides:  overrides,
 			Now:                deps.Now,
 			Logger:             logger,
 			All:                *all,
@@ -375,6 +387,14 @@ Flags:`)
 		}
 		wrappedAuth = api.CookieOrInnerAuth{Inner: auth, Sessions: sessions}
 	}
+	// schedulerSetCron is wired below once the scheduler is constructed.
+	// ReloadConfig captures it via the variable (not the value), so
+	// PATCH /api/v1/config/schedule reaches the running scheduler
+	// without restart. nil-safe: a daemon running without --apply or
+	// without docker doesn't build a scheduler, so the variable stays
+	// nil and reload is silently a no-op for the schedule section.
+	var schedulerSetCron func(*scheduler.CronSchedule)
+
 	// Cache one host-detection pass for the daemon's lifetime. Probes
 	// are cheap but deterministic across the run is nicer for the
 	// dashboard (no flicker between requests). Operators reboot when
@@ -400,11 +420,29 @@ Flags:`)
 		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
 		Events:           eventBus,
 		HostDetection:    &hostDetect,
-		// ReloadConfig is a no-op for now: scanJob re-reads the configstore
-		// at use time so classification changes already take effect on the
-		// next cycle. Subsystems that cache config (scheduler cron) live
-		// in the "restart required" bucket — documented in the UI.
-		ReloadConfig: func() {},
+		// ReloadConfig is fired by PATCH /api/v1/config/{section}.
+		// scanJob already re-reads the configstore per cycle, so
+		// classification changes propagate automatically; the only
+		// subsystem that needs a kick is the cron scheduler.
+		ReloadConfig: func() {
+			if schedulerSetCron == nil || configStore == nil {
+				return
+			}
+			settings := configStore.Settings()
+			effective := loaded.WithUISettings(settings.ToUISettings())
+			expr := effective.Schedule.Check
+			if expr == "" {
+				schedulerSetCron(nil)
+				return
+			}
+			parsed, err := scheduler.ParseCron(expr)
+			if err != nil {
+				logger.Warn("run: ignoring invalid schedule.check override", "expr", expr, "err", err)
+				return
+			}
+			schedulerSetCron(parsed)
+			logger.Info("run: scheduler cron hot-reloaded", "expr", expr)
+		},
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 
@@ -477,6 +515,9 @@ Flags:`)
 			Logger:         logger,
 			Name:           "run/scheduler",
 		}
+		// Expose SetCron to ReloadConfig so PATCH /api/v1/config/schedule
+		// updates the running cron expression without restart.
+		schedulerSetCron = sch.SetCron
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

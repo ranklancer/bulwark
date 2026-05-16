@@ -4,6 +4,7 @@ import type {
   AuditEvent,
   ClassificationOverride,
   ContainerEntry,
+  ContainerOverride,
   EffectiveConfigResponse,
   HostInfo,
   NotifierCreateRequest,
@@ -392,6 +393,65 @@ export function useEffectiveConfig() {
  */
 export function useHost() {
   return useResource<HostInfo>("/host");
+}
+
+/**
+ * useContainerSettings returns the map of per-container UI overrides
+ * (snapshot_auto / snapshot_dataset). The Containers page joins this
+ * with the live inventory to render per-row controls.
+ */
+export function useContainerSettings() {
+  return useResource<Record<string, ContainerOverride>>("/containers/settings");
+}
+
+/**
+ * usePatchContainerSettings PUTs the override for a single container.
+ * Body fields are optional: omitting both clears any previous values.
+ */
+export function usePatchContainerSettings() {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const patch = useCallback(async (name: string, body: ContainerOverride): Promise<void> => {
+    setBusy(name);
+    setError(null);
+    try {
+      const res = await api(`/containers/${encodeURIComponent(name)}/settings`, {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(extractError(text, res.status));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  const clear = useCallback(async (name: string): Promise<void> => {
+    setBusy(name);
+    setError(null);
+    try {
+      const res = await api(`/containers/${encodeURIComponent(name)}/settings`, {
+        method: "DELETE",
+      });
+      if (!res.ok && res.status !== 404) {
+        const text = await res.text();
+        throw new Error(extractError(text, res.status));
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setBusy(null);
+    }
+  }, []);
+
+  return { patch, clear, busy, error };
 }
 
 /**

@@ -24,9 +24,10 @@ const dataVersion = 1
 // Data is the in-memory representation of the encrypted store. New
 // UI-managed sections get added here as their phases land.
 type Data struct {
-	Version   int              `json:"version"`
-	Notifiers []NotifierEntry  `json:"notifiers,omitempty"`
-	Settings  SettingsOverride `json:"settings,omitempty"`
+	Version    int                          `json:"version"`
+	Notifiers  []NotifierEntry              `json:"notifiers,omitempty"`
+	Settings   SettingsOverride             `json:"settings,omitempty"`
+	Containers map[string]ContainerOverride `json:"containers,omitempty"`
 }
 
 // Store is a thread-safe, AES-GCM-encrypted JSON file store.
@@ -187,6 +188,12 @@ func (d Data) clone() Data {
 	if len(d.Notifiers) > 0 {
 		out.Notifiers = make([]NotifierEntry, len(d.Notifiers))
 		copy(out.Notifiers, d.Notifiers)
+	}
+	if len(d.Containers) > 0 {
+		out.Containers = make(map[string]ContainerOverride, len(d.Containers))
+		for k, v := range d.Containers {
+			out.Containers[k] = v
+		}
 	}
 	return out
 }

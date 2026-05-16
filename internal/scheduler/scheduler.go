@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -37,6 +39,50 @@ type Scheduler struct {
 	// Now is overrideable for tests that need deterministic next-tick
 	// computation. Defaults to time.Now.
 	Now func() time.Time
+
+	// liveCron holds the currently-active cron pointer; SetCron swaps
+	// it atomically and signals the running loop via reloadCh. nil
+	// until Run() copies in s.Cron at start.
+	liveCron atomic.Pointer[CronSchedule]
+
+	// reloadCh is the buffered channel of size 1 the cron loop selects
+	// on; SetCron does a non-blocking send. Initialised exactly once
+	// via reloadOnce so concurrent SetCron + Run() callers don't race
+	// on the chan field assignment.
+	reloadOnce sync.Once
+	reloadCh   chan struct{}
+}
+
+// reload returns the reload signalling channel, lazy-initialising it
+// the first time it's needed. Safe to call concurrently.
+func (s *Scheduler) reload() chan struct{} {
+	s.reloadOnce.Do(func() {
+		s.reloadCh = make(chan struct{}, 1)
+	})
+	return s.reloadCh
+}
+
+// SetCron atomically replaces the cron expression the scheduler uses
+// for next-tick calculation. Safe to call concurrently with Run().
+// The running loop (if any) wakes up on the next reload signal and
+// recomputes its next match against the new schedule. Passing nil
+// switches the scheduler to "no cron"; the loop then falls back to
+// Interval (or exits if Interval is also unset).
+//
+// Hot-reload contract: SetCron does not run the job immediately —
+// the new cron decides when the next firing happens. If the operator
+// wants an immediate run after a schedule change, they can fire
+// POST /api/v1/scans.
+func (s *Scheduler) SetCron(c *CronSchedule) {
+	s.liveCron.Store(c)
+	// Non-blocking send: the cron loop only needs one reload signal
+	// to recompute. A second SetCron while the loop is already woken
+	// is a no-op (it would recompute against the latest pointer
+	// anyway).
+	select {
+	case s.reload() <- struct{}{}:
+	default:
+	}
 }
 
 // Run executes the job loop until ctx is cancelled. The error returned from
@@ -51,7 +97,15 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	if s == nil || s.Job == nil {
 		return errors.New("scheduler: nil scheduler or job")
 	}
-	if s.Cron == nil && s.Interval <= 0 {
+	// Seed the atomic from the construction-time field. SetCron can
+	// flip the pointer at any time after Run starts.
+	s.liveCron.Store(s.Cron)
+	// Touch reload() so the channel is allocated before any concurrent
+	// SetCron tries to signal it. (SetCron also uses reload() to
+	// initialise, but doing it here makes the race detector happy
+	// regardless of call order.)
+	_ = s.reload()
+	if s.liveCron.Load() == nil && s.Interval <= 0 {
 		return nil
 	}
 	logger := s.Logger
@@ -67,7 +121,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		s.invoke(ctx, logger, name)
 	}
 
-	if s.Cron != nil {
+	if s.liveCron.Load() != nil {
 		return s.runCron(ctx, logger, name)
 	}
 
@@ -88,15 +142,25 @@ func (s *Scheduler) Run(ctx context.Context) error {
 // sleep that long via a timer (so context cancellation interrupts cleanly),
 // fire, then recompute. A cron schedule that never matches (e.g. Feb 30)
 // returns nil after logging — better than spin-waiting forever.
+//
+// Hot reload: liveCron is reread at the top of every iteration, so a
+// SetCron call mid-sleep wakes the loop via the reload channel and the
+// next iteration picks up the new schedule. If SetCron is called with
+// nil while running, the loop exits gracefully.
 func (s *Scheduler) runCron(ctx context.Context, logger *slog.Logger, name string) error {
 	now := s.Now
 	if now == nil {
 		now = time.Now
 	}
 	for {
-		next := s.Cron.Next(now())
+		cron := s.liveCron.Load()
+		if cron == nil {
+			logger.Info(name+": cron disabled via SetCron(nil); stopping")
+			return nil
+		}
+		next := cron.Next(now())
 		if next.IsZero() {
-			logger.Warn(name+": cron schedule has no future matches; stopping", "expr", s.Cron.String())
+			logger.Warn(name+": cron schedule has no future matches; stopping", "expr", cron.String())
 			return nil
 		}
 		wait := next.Sub(now())
@@ -112,6 +176,16 @@ func (s *Scheduler) runCron(ctx context.Context, logger *slog.Logger, name strin
 			return ctx.Err()
 		case <-timer.C:
 			s.invoke(ctx, logger, name)
+		case <-s.reload():
+			// Schedule changed mid-sleep — recompute against the new
+			// expression on the next iteration. Drain the timer so it
+			// doesn't fire spuriously.
+			timer.Stop()
+			if newCron := s.liveCron.Load(); newCron != nil {
+				logger.Info(name+": cron reloaded", "expr", newCron.String())
+			} else {
+				logger.Info(name+": cron reloaded (cleared)")
+			}
 		}
 	}
 }

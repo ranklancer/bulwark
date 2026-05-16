@@ -153,6 +153,67 @@ func TestScheduler_CronFiresAtComputedTime(t *testing.T) {
 	}
 }
 
+func TestScheduler_SetCron_RecomputesNext(t *testing.T) {
+	// Schedule starts with a far-future cron expression, then SetCron
+	// swaps in one that's about to fire. The loop must wake on
+	// reload and use the new schedule.
+	farFuture, _ := ParseCron("0 0 1 1 *") // Jan 1, ~once a year
+	soon, _ := ParseCron("* * * * *")      // every minute
+	var calls int32
+	// Now() returns a time near a minute boundary so soon's Next() is
+	// only ~50ms away once we swap.
+	start := time.Now().Truncate(time.Minute).Add(time.Minute - 50*time.Millisecond)
+	s := &Scheduler{
+		Cron:           farFuture,
+		RunImmediately: false,
+		Now:            func() time.Time { return start },
+		Job: func(_ context.Context) error {
+			atomic.AddInt32(&calls, 1)
+			return nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+
+	// Give Run a beat to enter runCron and start sleeping against
+	// farFuture's next firing.
+	time.Sleep(50 * time.Millisecond)
+	s.SetCron(soon)
+
+	<-done
+	if atomic.LoadInt32(&calls) == 0 {
+		t.Error("expected job to fire after SetCron swap; did not")
+	}
+}
+
+func TestScheduler_SetCron_NilStopsLoop(t *testing.T) {
+	cron, _ := ParseCron("* * * * *")
+	start := time.Now().Truncate(time.Minute).Add(2 * time.Hour) // far enough away that the loop is sleeping
+	s := &Scheduler{
+		Cron: cron,
+		Now:  func() time.Time { return start },
+		Job:  func(_ context.Context) error { return nil },
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+	s.SetCron(nil)
+	// Loop should exit on its own (not via context timeout). Use a
+	// shorter wait than the ctx timeout to confirm.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("expected clean nil exit, got %v", err)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Error("loop did not exit after SetCron(nil)")
+	}
+}
+
 func TestScheduler_NoScheduleIsNoop(t *testing.T) {
 	s := &Scheduler{Job: func(_ context.Context) error { return nil }}
 	if err := s.Run(context.Background()); err != nil {

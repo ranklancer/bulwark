@@ -3,9 +3,15 @@ import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
+import { Spinner } from "@/components/ui/Spinner";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/Table";
 import { formatTimestamp, riskLabel, riskTone } from "@/lib/format";
-import { useContainers } from "@/lib/hooks";
+import {
+  useContainers,
+  useContainerSettings,
+  usePatchContainerSettings,
+} from "@/lib/hooks";
+import type { ContainerOverride, ContainerSnapshotMode } from "@/lib/types";
 
 type Filter = "all" | "pending" | "skipped";
 
@@ -17,7 +23,36 @@ type Filter = "all" | "pending" | "skipped";
  */
 export default function Containers() {
   const { data, loading, error, refresh } = useContainers();
+  const {
+    data: settings,
+    refresh: refreshSettings,
+  } = useContainerSettings();
+  const { patch, clear, busy: savingName, error: saveError } = usePatchContainerSettings();
   const [filter, setFilter] = useState<Filter>("all");
+
+  async function setMode(name: string, mode: ContainerSnapshotMode) {
+    try {
+      if (mode === "from-label") {
+        await clear(name);
+      } else {
+        await patch(name, { snapshot_auto: mode === "auto" });
+      }
+      void refreshSettings();
+    } catch {
+      // saveError surfaces in the page-level banner
+    }
+  }
+
+  function currentMode(name: string): ContainerSnapshotMode {
+    const o: ContainerOverride | undefined = settings?.[name];
+    if (!o || (o.snapshot_auto === undefined && o.snapshot_dataset === undefined)) {
+      return "from-label";
+    }
+    if (o.snapshot_dataset !== undefined) {
+      return o.snapshot_dataset ? "auto" : "off";
+    }
+    return o.snapshot_auto ? "auto" : "off";
+  }
 
   const rows = useMemo(() => {
     const all = data ?? [];
@@ -71,6 +106,12 @@ export default function Containers() {
         </Button>
       </div>
 
+      {saveError ? (
+        <p className="text-sm text-red-600" role="alert">
+          {saveError}
+        </p>
+      ) : null}
+
       <Card>
         <CardHeader>
           <CardTitle>Inventory</CardTitle>
@@ -97,6 +138,7 @@ export default function Containers() {
                   <TH>Stack</TH>
                   <TH>Risk</TH>
                   <TH>Status</TH>
+                  <TH>Snapshot</TH>
                   <TH>Last scan</TH>
                 </TR>
               </THead>
@@ -129,6 +171,22 @@ export default function Containers() {
                       ) : (
                         <span className="text-emerald-700 dark:text-emerald-400">up to date</span>
                       )}
+                    </TD>
+                    <TD>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={currentMode(c.container_name)}
+                          onChange={(e) => void setMode(c.container_name, e.target.value as ContainerSnapshotMode)}
+                          disabled={savingName === c.container_name}
+                          className="rounded border border-border bg-background px-2 py-1 text-xs"
+                          aria-label={`Snapshot mode for ${c.container_name}`}
+                        >
+                          <option value="from-label">From label</option>
+                          <option value="auto">Auto-infer</option>
+                          <option value="off">Off</option>
+                        </select>
+                        {savingName === c.container_name ? <Spinner /> : null}
+                      </div>
                     </TD>
                     <TD className="text-xs">
                       {c.last_scan_id ? (

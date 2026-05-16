@@ -156,6 +156,14 @@ export interface HostInfo {
   configured_backend?: string;
 }
 
+export interface ContainerOverride {
+  snapshot_auto?: boolean;
+  snapshot_dataset?: string;
+  updated_at?: string;
+}
+
+export type ContainerSnapshotMode = "from-label" | "auto" | "off";
+
 export interface NotifierCreateRequest {
   name: string;
   kind: NotifierKind;
