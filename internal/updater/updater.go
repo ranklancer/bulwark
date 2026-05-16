@@ -29,6 +29,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/snapshot"
+	"github.com/bulwark-docker/bulwark/internal/snapshot/detect"
 )
 
 // DockerClient is the subset of *docker.Client the updater drives. The
@@ -54,6 +55,15 @@ type Updater struct {
 	// the snapshot is destroyed. Setting Snapshots without setting
 	// SnapshotTarget on an Apply call is a no-op for that call.
 	Snapshots snapshot.Backend
+
+	// MountTable, when non-nil, drives auto-inference of SnapshotTarget
+	// when ApplyOptions.SnapshotAutoInfer is true and SnapshotTarget is
+	// empty. The updater walks the container's HostConfig.Binds and
+	// asks the table for the deepest snapshot-capable mount containing
+	// each bind source; the first match becomes the snapshot target.
+	// nil disables auto-inference even when the per-container label is
+	// set (the operator gets a log warning).
+	MountTable *detect.MountTable
 
 	// Hooks runs lifecycle hook scripts. nil means use the default
 	// hooks.ExecRunner. Tests inject hooks.FakeRunner.
@@ -117,6 +127,13 @@ type ApplyOptions struct {
 	PreUpdateHook  string
 	PostUpdateHook string
 	RollbackHook   string
+
+	// SnapshotAutoInfer asks the updater to fill SnapshotTarget by
+	// walking the container's HostConfig.Binds against u.MountTable
+	// when SnapshotTarget is empty at call time. Set true by callers
+	// observing the "bulwark.snapshot.auto" label; explicit
+	// SnapshotTarget always wins.
+	SnapshotAutoInfer bool
 }
 
 // Apply runs the full pull + recreate + verify + (rollback) pipeline.
@@ -187,6 +204,29 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 	if err := u.Docker.PullImage(ctx, targetImage); err != nil {
 		res.Err = fmt.Errorf("pull: %w", err)
 		return res
+	}
+
+	// --- 2.4. Auto-infer SnapshotTarget when the operator opted in via
+	// the bulwark.snapshot.auto label and didn't supply an explicit
+	// dataset. Walks the container's HostConfig.Binds against the
+	// daemon's mount table; the first bind whose source lives on a
+	// snapshot-capable filesystem (zfs / btrfs) wins. No-op when the
+	// mount table is nil or the container has no bind mounts.
+	if opts.SnapshotAutoInfer && opts.SnapshotTarget == "" {
+		if u.MountTable == nil {
+			logger.Warn("updater: snapshot auto-infer requested but no MountTable wired", "container", originalName)
+		} else {
+			binds, err := detect.ParseHostConfigBinds(insp.HostConfig)
+			if err != nil {
+				logger.Warn("updater: snapshot auto-infer: parse binds", "container", originalName, "err", err)
+			} else if target, ok := detect.InferTargetFromBinds(binds, u.MountTable); ok {
+				opts.SnapshotTarget = target
+				logger.Info("updater: snapshot auto-infer matched",
+					"container", originalName, "target", target)
+			} else {
+				logger.Info("updater: snapshot auto-infer: no matching bind on a known fs", "container", originalName)
+			}
+		}
 	}
 
 	// --- 2.5. Take a filesystem snapshot, if configured ---------------------

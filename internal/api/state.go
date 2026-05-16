@@ -17,6 +17,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/configstore"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/snapshot"
+	"github.com/bulwark-docker/bulwark/internal/snapshot/detect"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
@@ -92,6 +93,12 @@ type StateHandler struct {
 	// config (rate limiter, scheduler cron, etc.). nil is fine;
 	// most subsystems read configstore at use-time anyway.
 	ReloadConfig func()
+
+	// HostDetection, when set, overrides the live host probe with a
+	// fixture. nil means GET /api/v1/host runs detect.Detect() against
+	// the real filesystem at request time. Set in tests + when the
+	// caller wants to cache one probe pass for the daemon's lifetime.
+	HostDetection *detect.Result
 
 	// LoadedConfig, when set, is exposed (with secrets redacted) via
 	// GET /api/v1/config and feeds the GET /api/v1/policies effective-
@@ -180,6 +187,11 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 	if h.SnapshotBackend != nil {
 		mux.HandleFunc("GET /api/v1/snapshots", h.authed(h.listSnapshots))
 	}
+	// Host detection is always mounted — even when no SnapshotBackend
+	// is configured, the dashboard wants to render a "platform =
+	// truenas-scale" badge and suggest a backend. The endpoint is
+	// read-only and reveals no secrets.
+	mux.HandleFunc("GET /api/v1/host", h.authed(h.getHost))
 	if h.Events != nil {
 		mux.HandleFunc("GET /api/v1/events", h.authed(streamHandler(h.Events)))
 	}

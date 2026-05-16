@@ -5,6 +5,7 @@ import type {
   ClassificationOverride,
   ContainerEntry,
   EffectiveConfigResponse,
+  HostInfo,
   NotifierCreateRequest,
   NotifierEntry,
   NotifierEntryDetail,
@@ -383,6 +384,14 @@ export function useSettings() {
  */
 export function useEffectiveConfig() {
   return useResource<EffectiveConfigResponse>("/config/effective");
+}
+
+/**
+ * useHost returns the daemon's host detection result (platform,
+ * capabilities, suggested backend, configured backend).
+ */
+export function useHost() {
+  return useResource<HostInfo>("/host");
 }
 
 /**

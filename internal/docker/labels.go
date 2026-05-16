@@ -38,6 +38,12 @@ type LabelOverrides struct {
 	// SnapshotDataset is the value of "bulwark.snapshot.dataset".
 	SnapshotDataset string
 
+	// SnapshotAuto is true when "bulwark.snapshot.auto" is set to a
+	// truthy value. Tells the apply pipeline to infer the snapshot
+	// target from the container's bind mounts + host mount table when
+	// SnapshotDataset is empty. Explicit SnapshotDataset always wins.
+	SnapshotAuto bool
+
 	// PolicyPatch / PolicyMinor / PolicyMajor are per-container policy
 	// overrides from "bulwark.policy.<kind>" labels. RiskUnknown when absent.
 	PolicyPatch types.RiskLevel
@@ -78,6 +84,8 @@ func ParseLabels(labels map[string]string) LabelOverrides {
 			out.HealthTimeout = v
 		case "snapshot.dataset":
 			out.SnapshotDataset = v
+		case "snapshot.auto":
+			out.SnapshotAuto = parseBool(v, false)
 		case "policy.patch":
 			out.PolicyPatch = types.ParseRiskLevel(v)
 		case "policy.minor":

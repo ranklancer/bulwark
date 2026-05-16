@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
@@ -12,6 +13,20 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/updater"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
+
+// parseAutoSnapshotLabel returns true when the value is a truthy
+// representation of "auto-snapshot is enabled". Mirrors the kept-in-
+// sync helper in internal/docker/labels.go without dragging that
+// package's parser through a wider rename. The accepted set
+// ("1"/"true"/"yes"/"on", case-insensitive) matches Docker label
+// conventions.
+func parseAutoSnapshotLabel(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
 
 // applyOutcome records the result of a single auto-apply attempt. It's
 // keyed by container name in applyEligibleUpdates' returned map.
@@ -100,8 +115,15 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 		// The bulwark.snapshot.dataset label tells us which filesystem
 		// path/dataset to snapshot. Without a label the snapshot step is
 		// skipped — only container-level rollback applies.
+		//
+		// bulwark.snapshot.auto opts in to auto-inference from the
+		// container's bind mounts against the host mount table; explicit
+		// dataset always wins.
 		if ds := r.Container.Labels["bulwark.snapshot.dataset"]; ds != "" {
 			opts.SnapshotTarget = ds
+			opts.SnapshotLabel = r.Container.Name
+		} else if parseAutoSnapshotLabel(r.Container.Labels["bulwark.snapshot.auto"]) {
+			opts.SnapshotAutoInfer = true
 			opts.SnapshotLabel = r.Container.Name
 		}
 		// Pre/post/rollback hook paths from the container's labels.

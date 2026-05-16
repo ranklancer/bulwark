@@ -148,6 +148,14 @@ export interface EffectiveConfigResponse {
   overridden_sections: string[];
 }
 
+export interface HostInfo {
+  platform: string;
+  version?: string;
+  capabilities: string[];
+  suggested_backend?: string;
+  configured_backend?: string;
+}
+
 export interface NotifierCreateRequest {
   name: string;
   kind: NotifierKind;

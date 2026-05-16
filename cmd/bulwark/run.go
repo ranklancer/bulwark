@@ -22,6 +22,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
+	"github.com/bulwark-docker/bulwark/internal/snapshot/detect"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
 	"github.com/bulwark-docker/bulwark/internal/store"
@@ -248,6 +249,15 @@ Flags:`)
 	// If --apply is set we need a concrete *docker.Client (write methods).
 	// Tests inject deps.Updater; production constructs one when dockerClient
 	// is the real *docker.Client we built earlier.
+	// Load the host's mount table once at startup so auto-snapshot
+	// inference doesn't re-stat /proc/mounts on every apply. Failures
+	// are logged + downgraded — auto-inference silently falls back to
+	// "no target inferred" when the table is unavailable.
+	mountTable, mtErr := detect.LoadMountTable()
+	if mtErr != nil {
+		logger.Warn("run: load mount table failed; auto-snapshot disabled", "err", mtErr)
+	}
+
 	var upd *updater.Updater
 	if *apply {
 		if dc, ok := dockerClient.(*docker.Client); ok {
@@ -258,6 +268,7 @@ Flags:`)
 				Hooks:         hooks.ExecRunner{HooksRoot: hooksRoot(loaded)},
 				Logger:        logger,
 				HealthTimeout: *healthTimeout,
+				MountTable:    mountTable,
 			}
 		} else if deps.Updater != nil {
 			upd = deps.Updater
@@ -364,6 +375,17 @@ Flags:`)
 		}
 		wrappedAuth = api.CookieOrInnerAuth{Inner: auth, Sessions: sessions}
 	}
+	// Cache one host-detection pass for the daemon's lifetime. Probes
+	// are cheap but deterministic across the run is nicer for the
+	// dashboard (no flicker between requests). Operators reboot when
+	// they change the underlying host class.
+	hostDetect := detect.Detect()
+	logger.Info("run: host detection",
+		"platform", hostDetect.Platform,
+		"capabilities", hostDetect.Capabilities,
+		"suggested_backend", hostDetect.SuggestedBackend,
+	)
+
 	state := &api.StateHandler{
 		Store:            st,
 		Logger:           logger,
@@ -377,6 +399,7 @@ Flags:`)
 		ConfigStore:      configStore,
 		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
 		Events:           eventBus,
+		HostDetection:    &hostDetect,
 		// ReloadConfig is a no-op for now: scanJob re-reads the configstore
 		// at use time so classification changes already take effect on the
 		// next cycle. Subsystems that cache config (scheduler cron) live
