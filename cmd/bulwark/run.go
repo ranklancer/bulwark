@@ -261,7 +261,7 @@ Flags:`)
 	var upd *updater.Updater
 	if *apply {
 		if dc, ok := dockerClient.(*docker.Client); ok {
-			snapBackend := buildSnapshotBackend(loaded, logger)
+			snapBackend := buildSnapshotBackend(loaded, configStore, logger)
 			upd = &updater.Updater{
 				Docker:        dc,
 				Snapshots:     snapBackend,
@@ -291,6 +291,18 @@ Flags:`)
 		if configStore != nil {
 			effective = loaded.WithUISettings(configStore.Settings().ToUISettings())
 			effectiveClassifier = effective.ClassifierConfig()
+		}
+		// Health override: push the merged Health.Timeout onto the
+		// long-lived Updater. Scans run sequentially in a single
+		// goroutine, so this write is race-free in practice; the
+		// updater reads HealthTimeout fresh in its waitForHealthy
+		// helper.
+		if upd != nil && effective != nil && effective.Health.Timeout != "" {
+			if d, err := time.ParseDuration(effective.Health.Timeout); err == nil {
+				upd.HealthTimeout = d
+			} else {
+				logger.Warn("run: ignoring invalid health.timeout override", "value", effective.Health.Timeout, "err", err)
+			}
 		}
 		scn := &scanner.Scanner{
 			Docker:      dockerClient,
@@ -417,7 +429,7 @@ Flags:`)
 		Registry:         notifierRegistry,
 		LoadedConfig:     loaded,
 		ConfigStore:      configStore,
-		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
+		SnapshotBackend:  buildSnapshotBackend(loaded, configStore, logger),
 		Events:           eventBus,
 		HostDetection:    &hostDetect,
 		// ReloadConfig is fired by PATCH /api/v1/config/{section}.

@@ -82,6 +82,89 @@ func TestStore_PatchSection_RejectsBadRisk(t *testing.T) {
 	}
 }
 
+func TestStore_PatchSection_Health(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	body := []byte(`{"timeout":"180s","threshold":5}`)
+	out, err := s.PatchSection("health", body, json.Unmarshal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Health == nil || out.Health.Timeout == nil || *out.Health.Timeout != "180s" {
+		t.Errorf("health.timeout missing: %+v", out.Health)
+	}
+	if out.Health.Threshold == nil || *out.Health.Threshold != 5 {
+		t.Errorf("health.threshold missing: %+v", out.Health.Threshold)
+	}
+}
+
+func TestStore_PatchSection_Health_RejectsBadDuration(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	_, err := s.PatchSection("health", []byte(`{"timeout":"forever"}`), json.Unmarshal)
+	if err == nil {
+		t.Fatal("expected error for invalid duration")
+	}
+}
+
+func TestStore_PatchSection_Logging(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	if _, err := s.PatchSection("logging", []byte(`{"level":"debug","format":"json"}`), json.Unmarshal); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Settings()
+	if got.Logging == nil || got.Logging.Level == nil || *got.Logging.Level != "debug" {
+		t.Errorf("logging.level not set: %+v", got.Logging)
+	}
+}
+
+func TestStore_PatchSection_Logging_RejectsBadLevel(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	_, err := s.PatchSection("logging", []byte(`{"level":"shouty"}`), json.Unmarshal)
+	if err == nil {
+		t.Fatal("expected error for invalid log level")
+	}
+}
+
+func TestStore_PatchSection_Snapshots_Proxmox(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	body := []byte(`{"backend":"proxmox","proxmox":{"url":"https://pve.local:8006","token":"u@pve!t=s","node":"pve01","vmid":100,"kind":"lxc","insecure_tls":true}}`)
+	out, err := s.PatchSection("snapshots", body, json.Unmarshal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Snapshots == nil || out.Snapshots.Backend == nil || *out.Snapshots.Backend != "proxmox" {
+		t.Errorf("backend not set: %+v", out.Snapshots)
+	}
+	if out.Snapshots.Proxmox == nil || out.Snapshots.Proxmox.Token == nil || *out.Snapshots.Proxmox.Token != "u@pve!t=s" {
+		t.Errorf("proxmox token not set: %+v", out.Snapshots.Proxmox)
+	}
+
+	// Partial patch: only change vmid; token should persist.
+	if _, err := s.PatchSection("snapshots", []byte(`{"proxmox":{"vmid":200}}`), json.Unmarshal); err != nil {
+		t.Fatal(err)
+	}
+	got := s.Settings()
+	if got.Snapshots.Proxmox.Token == nil || *got.Snapshots.Proxmox.Token != "u@pve!t=s" {
+		t.Error("token was cleared by partial patch")
+	}
+	if got.Snapshots.Proxmox.VMID == nil || *got.Snapshots.Proxmox.VMID != 200 {
+		t.Errorf("vmid not updated: %+v", got.Snapshots.Proxmox.VMID)
+	}
+}
+
+func TestStore_PatchSection_Snapshots_RejectsBadKind(t *testing.T) {
+	dir := t.TempDir()
+	s, _ := Open(dir)
+	_, err := s.PatchSection("snapshots", []byte(`{"proxmox":{"kind":"bsd"}}`), json.Unmarshal)
+	if err == nil {
+		t.Fatal("expected error for invalid proxmox kind")
+	}
+}
+
 func TestStore_PatchSection_UnknownSection(t *testing.T) {
 	dir := t.TempDir()
 	s, _ := Open(dir)

@@ -37,9 +37,59 @@ func (h *StateHandler) getSettings(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, settingsResponse{
-		Settings: h.ConfigStore.Settings(),
+		Settings: redactSettings(h.ConfigStore.Settings()),
 		Sections: configstore.SettingsSections,
 	})
+}
+
+// redactSettings returns a copy of o with secret fields replaced by
+// the redactedMarker so the dashboard never sees the raw value. The
+// PATCH path treats any field whose incoming value equals redactedMarker
+// as "leave the persisted value untouched" — that lets the edit form
+// pre-fill non-secret fields without forcing the operator to re-enter
+// the token on every save.
+func redactSettings(o configstore.SettingsOverride) configstore.SettingsOverride {
+	if o.Snapshots != nil && o.Snapshots.Proxmox != nil && o.Snapshots.Proxmox.Token != nil && *o.Snapshots.Proxmox.Token != "" {
+		// Deep-copy the affected branch so we don't mutate the
+		// configstore's internal state.
+		proxmoxCopy := *o.Snapshots.Proxmox
+		redacted := redactedMarker
+		proxmoxCopy.Token = &redacted
+		snapsCopy := *o.Snapshots
+		snapsCopy.Proxmox = &proxmoxCopy
+		o.Snapshots = &snapsCopy
+	}
+	return o
+}
+
+const redactedMarker = "***"
+
+// stripRedactedProxmoxToken removes the proxmox.token field from a
+// snapshots-section PATCH payload when its value is the redactedMarker.
+// This is the "leave token alone on edit" convention paired with
+// redactSettings(). Returns the original bytes when there's nothing to
+// strip; returns an error only on malformed JSON.
+func stripRedactedProxmoxToken(raw []byte) ([]byte, error) {
+	var generic map[string]any
+	if err := json.Unmarshal(raw, &generic); err != nil {
+		// Let the regular decode path produce the friendlier error
+		// message; here just pass through.
+		return raw, nil
+	}
+	proxmoxAny, ok := generic["proxmox"].(map[string]any)
+	if !ok {
+		return raw, nil
+	}
+	tok, ok := proxmoxAny["token"].(string)
+	if !ok || tok != redactedMarker {
+		return raw, nil
+	}
+	delete(proxmoxAny, "token")
+	out, err := json.Marshal(generic)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (h *StateHandler) getEffectiveConfig(w http.ResponseWriter, _ *http.Request) {
@@ -87,6 +137,19 @@ func (h *StateHandler) patchSettingsSection(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, errEnvelope(fmt.Errorf("read body: %w", err)))
 		return
+	}
+	if section == "snapshots" {
+		// Honour the "leave token unchanged" convention: when the
+		// dashboard echoes back the redacted placeholder we drop the
+		// token from the incoming patch so the persisted secret
+		// survives. Operators who want to clear the token send an
+		// explicit empty string.
+		var err error
+		raw, err = stripRedactedProxmoxToken(raw)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, errEnvelope(err))
+			return
+		}
 	}
 	out, err := h.ConfigStore.PatchSection(section, raw, json.Unmarshal)
 	if err != nil {

@@ -183,14 +183,15 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 		mux.HandleFunc("GET /api/v1/config", h.authed(h.getConfig))
 		mux.HandleFunc("GET /api/v1/policies", h.authed(h.getPolicies))
 	}
-	if h.ConfigStore != nil && h.LoadedConfig != nil {
-		// UI-driven config: editable subset of bulwark.yaml. Overrides
-		// live in the encrypted configstore and merge on top of the
-		// yaml-loaded base at use-time. Sections not listed in
-		// configstore.SettingsSections stay yaml-only by design.
-		mux.HandleFunc("GET /api/v1/config/effective", h.authed(h.getEffectiveConfig))
+	if h.ConfigStore != nil {
+		// /settings + PATCH only need the configstore; they return
+		// the override payload directly. /effective also needs
+		// LoadedConfig so it can compute the merged tree.
 		mux.HandleFunc("GET /api/v1/config/settings", h.authed(h.getSettings))
 		mux.HandleFunc("PATCH /api/v1/config/{section}", h.authed(h.csrfProtect(h.patchSettingsSection)))
+		if h.LoadedConfig != nil {
+			mux.HandleFunc("GET /api/v1/config/effective", h.authed(h.getEffectiveConfig))
+		}
 	}
 	if h.SnapshotBackend != nil {
 		mux.HandleFunc("GET /api/v1/snapshots", h.authed(h.listSnapshots))

@@ -132,9 +132,38 @@ export interface ScheduleOverride {
   check?: string;
 }
 
+export interface HealthOverride {
+  timeout?: string;
+  interval?: string;
+  threshold?: number;
+  grace_period?: string;
+}
+
+export interface LoggingOverride {
+  level?: string;
+  format?: string;
+}
+
+export interface ProxmoxOverride {
+  url?: string;
+  token?: string;
+  node?: string;
+  vmid?: number;
+  kind?: string;
+  insecure_tls?: boolean;
+}
+
+export interface SnapshotsOverride {
+  backend?: string;
+  proxmox?: ProxmoxOverride;
+}
+
 export interface SettingsOverride {
   schedule?: ScheduleOverride;
   classification?: ClassificationOverride;
+  health?: HealthOverride;
+  logging?: LoggingOverride;
+  snapshots?: SnapshotsOverride;
   updated_at?: string;
 }
 

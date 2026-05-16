@@ -24,10 +24,13 @@ import (
 //   * api.listen — needs a server restart; "edit in yaml" instead.
 //   * api.auth.* — secrets live in yaml/env, not in the store schema.
 //   * docker.host — same reasoning: identity of the host is bootstrap-time.
-//   * snapshots, registries, hooks — large scope, future phase.
+//   * registries, hooks — large scope, future phase.
 type SettingsOverride struct {
 	Schedule       *ScheduleOverride       `json:"schedule,omitempty"`
 	Classification *ClassificationOverride `json:"classification,omitempty"`
+	Health         *HealthOverride         `json:"health,omitempty"`
+	Logging        *LoggingOverride        `json:"logging,omitempty"`
+	Snapshots      *SnapshotsOverride      `json:"snapshots,omitempty"`
 	UpdatedAt      time.Time               `json:"updated_at"`
 }
 
@@ -61,6 +64,62 @@ type PolicyOverride struct {
 	Prerelease  *string `json:"prerelease,omitempty"`
 }
 
+// HealthOverride mirrors the editable subset of config.HealthConfig
+// (the post-update health-check tuning). Hot-reloadable: scanJob
+// re-reads these per cycle and updates the Updater's HealthTimeout.
+type HealthOverride struct {
+	// Timeout is the post-recreate "container must report healthy"
+	// budget; the updater rolls back when this elapses. Accepts any
+	// duration string Go's time.ParseDuration handles (e.g. "180s").
+	Timeout *string `json:"timeout,omitempty"`
+	// Interval is how often the updater polls the container's health
+	// status during the wait window.
+	Interval *string `json:"interval,omitempty"`
+	// Threshold is the consecutive-healthy-polls count required
+	// before declaring the container truly up.
+	Threshold *int `json:"threshold,omitempty"`
+	// GracePeriod is the post-start "ignore unhealthy status"
+	// window so apps that start slow don't trigger a roll-back at
+	// boot. Honours the container's HEALTHCHECK start_period when
+	// the container declares one; this is the daemon-wide minimum.
+	GracePeriod *string `json:"grace_period,omitempty"`
+}
+
+// LoggingOverride mirrors config.LoggingConfig. Restart-required:
+// the slog logger's level is set once at startup; flipping it at
+// runtime needs a slog.LevelVar refactor that's deferred to a
+// follow-up phase.
+type LoggingOverride struct {
+	Level  *string `json:"level,omitempty"`  // "debug" | "info" | "warn" | "error"
+	Format *string `json:"format,omitempty"` // "text" | "json"
+}
+
+// SnapshotsOverride captures the UI-mutable parts of the snapshots
+// section. For v1 only Proxmox is exposed here (its API token is a
+// secret that benefits from encrypted-at-rest storage); ZFS / Btrfs /
+// Restic stay yaml-only because their configuration is mostly
+// non-secret paths.
+type SnapshotsOverride struct {
+	// Backend, when set, overrides snapshots.backend in yaml. Empty
+	// string explicitly disables all snapshot backends.
+	Backend *string `json:"backend,omitempty"`
+	// Proxmox, when set, replaces snapshots.proxmox.* yaml fields
+	// non-nil-field-by-non-nil-field. Token is treated as a secret
+	// for the dashboard's redaction pass.
+	Proxmox *ProxmoxOverride `json:"proxmox,omitempty"`
+}
+
+// ProxmoxOverride mirrors config.SnapshotsConfig.Proxmox. All fields
+// optional so the UI can patch one field at a time.
+type ProxmoxOverride struct {
+	URL         *string `json:"url,omitempty"`
+	Token       *string `json:"token,omitempty"`
+	Node        *string `json:"node,omitempty"`
+	VMID        *int    `json:"vmid,omitempty"`
+	Kind        *string `json:"kind,omitempty"`
+	InsecureTLS *bool   `json:"insecure_tls,omitempty"`
+}
+
 // SettingsSection describes one UI-editable section: the wire name +
 // whether changing it takes effect immediately or requires a daemon
 // restart. The dashboard renders a "restart required" banner for
@@ -76,13 +135,24 @@ type SettingsSection struct {
 //
 // Sections marked RestartRequired persist immediately but only take
 // effect on the next daemon start; the dashboard surfaces this clearly
-// so operators know what to expect. classification reloads live
-// because scanCycleConfig is rebuilt from the merged config per scan;
-// schedule reloads live because the scheduler exposes SetCron and the
-// ReloadConfig hook calls it when this section is PATCHed.
+// so operators know what to expect.
+//
+//   classification — reloads live (scanCycleConfig is rebuilt per scan
+//                    from the merged config).
+//   schedule       — reloads live (scheduler.SetCron is called from
+//                    ReloadConfig).
+//   health         — reloads live (scanJob updates Updater.HealthTimeout
+//                    each cycle from the merged effective config).
+//   logging        — restart required (slog handler level is set once
+//                    at startup; LevelVar refactor is a future phase).
+//   snapshots      — restart required (the backend pointer is wired
+//                    into StateHandler + Updater at startup).
 var SettingsSections = []SettingsSection{
 	{Name: "schedule", RestartRequired: false},
 	{Name: "classification", RestartRequired: false},
+	{Name: "health", RestartRequired: false},
+	{Name: "logging", RestartRequired: true},
+	{Name: "snapshots", RestartRequired: true},
 }
 
 // sectionNames returns the section names alone, for compact responses
@@ -168,6 +238,57 @@ func (s *Store) PatchSection(section string, raw []byte, decode func([]byte, any
 				}
 				mergePolicy(d.Settings.Classification.Policies, incoming.Policies)
 			}
+		case "health":
+			var incoming HealthOverride
+			if err := decode(raw, &incoming); err != nil {
+				return fmt.Errorf("decode health: %w", err)
+			}
+			if d.Settings.Health == nil {
+				d.Settings.Health = &HealthOverride{}
+			}
+			if incoming.Timeout != nil {
+				d.Settings.Health.Timeout = incoming.Timeout
+			}
+			if incoming.Interval != nil {
+				d.Settings.Health.Interval = incoming.Interval
+			}
+			if incoming.Threshold != nil {
+				d.Settings.Health.Threshold = incoming.Threshold
+			}
+			if incoming.GracePeriod != nil {
+				d.Settings.Health.GracePeriod = incoming.GracePeriod
+			}
+		case "logging":
+			var incoming LoggingOverride
+			if err := decode(raw, &incoming); err != nil {
+				return fmt.Errorf("decode logging: %w", err)
+			}
+			if d.Settings.Logging == nil {
+				d.Settings.Logging = &LoggingOverride{}
+			}
+			if incoming.Level != nil {
+				d.Settings.Logging.Level = incoming.Level
+			}
+			if incoming.Format != nil {
+				d.Settings.Logging.Format = incoming.Format
+			}
+		case "snapshots":
+			var incoming SnapshotsOverride
+			if err := decode(raw, &incoming); err != nil {
+				return fmt.Errorf("decode snapshots: %w", err)
+			}
+			if d.Settings.Snapshots == nil {
+				d.Settings.Snapshots = &SnapshotsOverride{}
+			}
+			if incoming.Backend != nil {
+				d.Settings.Snapshots.Backend = incoming.Backend
+			}
+			if incoming.Proxmox != nil {
+				if d.Settings.Snapshots.Proxmox == nil {
+					d.Settings.Snapshots.Proxmox = &ProxmoxOverride{}
+				}
+				mergeProxmox(d.Settings.Snapshots.Proxmox, incoming.Proxmox)
+			}
 		default:
 			return fmt.Errorf("unknown section %q (known: %s)", section, strings.Join(sectionNames(), ", "))
 		}
@@ -178,6 +299,29 @@ func (s *Store) PatchSection(section string, raw []byte, decode func([]byte, any
 		return SettingsOverride{}, err
 	}
 	return out.Settings, nil
+}
+
+// mergeProxmox applies incoming non-nil fields onto target. Mirrors
+// mergePolicy's "incoming wins" semantics so partial updates compose.
+func mergeProxmox(target, incoming *ProxmoxOverride) {
+	if incoming.URL != nil {
+		target.URL = incoming.URL
+	}
+	if incoming.Token != nil {
+		target.Token = incoming.Token
+	}
+	if incoming.Node != nil {
+		target.Node = incoming.Node
+	}
+	if incoming.VMID != nil {
+		target.VMID = incoming.VMID
+	}
+	if incoming.Kind != nil {
+		target.Kind = incoming.Kind
+	}
+	if incoming.InsecureTLS != nil {
+		target.InsecureTLS = incoming.InsecureTLS
+	}
 }
 
 // mergePolicy applies incoming non-nil pointer fields onto target.
@@ -238,6 +382,68 @@ func (o SettingsOverride) Validate() error {
 			}
 		}
 	}
+	if o.Health != nil {
+		for field, v := range map[string]*string{
+			"health.timeout":      o.Health.Timeout,
+			"health.interval":     o.Health.Interval,
+			"health.grace_period": o.Health.GracePeriod,
+		} {
+			if v == nil || strings.TrimSpace(*v) == "" {
+				continue
+			}
+			if err := validateDuration(field, *v); err != nil {
+				return err
+			}
+		}
+		if o.Health.Threshold != nil && *o.Health.Threshold < 1 {
+			return fmt.Errorf("health.threshold must be >= 1, got %d", *o.Health.Threshold)
+		}
+	}
+	if o.Logging != nil {
+		if o.Logging.Level != nil && strings.TrimSpace(*o.Logging.Level) != "" {
+			switch strings.ToLower(strings.TrimSpace(*o.Logging.Level)) {
+			case "debug", "info", "warn", "error":
+			default:
+				return fmt.Errorf("logging.level %q is not one of debug|info|warn|error", *o.Logging.Level)
+			}
+		}
+		if o.Logging.Format != nil && strings.TrimSpace(*o.Logging.Format) != "" {
+			switch strings.ToLower(strings.TrimSpace(*o.Logging.Format)) {
+			case "text", "json":
+			default:
+				return fmt.Errorf("logging.format %q is not one of text|json", *o.Logging.Format)
+			}
+		}
+	}
+	if o.Snapshots != nil {
+		if o.Snapshots.Backend != nil && strings.TrimSpace(*o.Snapshots.Backend) != "" {
+			switch strings.ToLower(strings.TrimSpace(*o.Snapshots.Backend)) {
+			case "none", "zfs", "btrfs", "restic", "proxmox":
+			default:
+				return fmt.Errorf("snapshots.backend %q is not one of none|zfs|btrfs|restic|proxmox", *o.Snapshots.Backend)
+			}
+		}
+		if o.Snapshots.Proxmox != nil {
+			p := o.Snapshots.Proxmox
+			if p.VMID != nil && *p.VMID < 0 {
+				return fmt.Errorf("snapshots.proxmox.vmid must be >= 0 (got %d)", *p.VMID)
+			}
+			if p.Kind != nil && strings.TrimSpace(*p.Kind) != "" {
+				switch strings.ToLower(strings.TrimSpace(*p.Kind)) {
+				case "qemu", "lxc":
+				default:
+					return fmt.Errorf("snapshots.proxmox.kind %q is not 'qemu' or 'lxc'", *p.Kind)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateDuration(field, v string) error {
+	if _, err := time.ParseDuration(v); err != nil {
+		return fmt.Errorf("%s %q is not a valid duration (e.g. '60s', '5m'): %w", field, v, err)
+	}
 	return nil
 }
 
@@ -278,6 +484,34 @@ func (o SettingsOverride) ToUISettings() *config.UISettings {
 		}
 		out.Classification = c
 	}
+	if o.Health != nil {
+		out.Health = &config.HealthUISettings{
+			Timeout:     o.Health.Timeout,
+			Interval:    o.Health.Interval,
+			Threshold:   o.Health.Threshold,
+			GracePeriod: o.Health.GracePeriod,
+		}
+	}
+	if o.Logging != nil {
+		out.Logging = &config.LoggingUISettings{
+			Level:  o.Logging.Level,
+			Format: o.Logging.Format,
+		}
+	}
+	if o.Snapshots != nil {
+		s := &config.SnapshotsUISettings{Backend: o.Snapshots.Backend}
+		if o.Snapshots.Proxmox != nil {
+			s.Proxmox = &config.ProxmoxUISettings{
+				URL:         o.Snapshots.Proxmox.URL,
+				Token:       o.Snapshots.Proxmox.Token,
+				Node:        o.Snapshots.Proxmox.Node,
+				VMID:        o.Snapshots.Proxmox.VMID,
+				Kind:        o.Snapshots.Proxmox.Kind,
+				InsecureTLS: o.Snapshots.Proxmox.InsecureTLS,
+			}
+		}
+		out.Snapshots = s
+	}
 	return out
 }
 
@@ -307,5 +541,51 @@ func (o SettingsOverride) clone() SettingsOverride {
 		}
 		out.Classification = &c
 	}
+	if o.Health != nil {
+		h := HealthOverride{}
+		copyStringPtr(&h.Timeout, o.Health.Timeout)
+		copyStringPtr(&h.Interval, o.Health.Interval)
+		copyStringPtr(&h.GracePeriod, o.Health.GracePeriod)
+		if o.Health.Threshold != nil {
+			v := *o.Health.Threshold
+			h.Threshold = &v
+		}
+		out.Health = &h
+	}
+	if o.Logging != nil {
+		l := LoggingOverride{}
+		copyStringPtr(&l.Level, o.Logging.Level)
+		copyStringPtr(&l.Format, o.Logging.Format)
+		out.Logging = &l
+	}
+	if o.Snapshots != nil {
+		s := SnapshotsOverride{}
+		copyStringPtr(&s.Backend, o.Snapshots.Backend)
+		if o.Snapshots.Proxmox != nil {
+			p := ProxmoxOverride{}
+			copyStringPtr(&p.URL, o.Snapshots.Proxmox.URL)
+			copyStringPtr(&p.Token, o.Snapshots.Proxmox.Token)
+			copyStringPtr(&p.Node, o.Snapshots.Proxmox.Node)
+			copyStringPtr(&p.Kind, o.Snapshots.Proxmox.Kind)
+			if o.Snapshots.Proxmox.VMID != nil {
+				v := *o.Snapshots.Proxmox.VMID
+				p.VMID = &v
+			}
+			if o.Snapshots.Proxmox.InsecureTLS != nil {
+				v := *o.Snapshots.Proxmox.InsecureTLS
+				p.InsecureTLS = &v
+			}
+			s.Proxmox = &p
+		}
+		out.Snapshots = &s
+	}
 	return out
+}
+
+func copyStringPtr(dst **string, src *string) {
+	if src == nil {
+		return
+	}
+	v := *src
+	*dst = &v
 }

@@ -6,7 +6,9 @@ import type {
   ContainerEntry,
   ContainerOverride,
   EffectiveConfigResponse,
+  HealthOverride,
   HostInfo,
+  LoggingOverride,
   NotifierCreateRequest,
   NotifierEntry,
   NotifierEntryDetail,
@@ -15,6 +17,7 @@ import type {
   ScheduleOverride,
   SettingsResponse,
   SnapshotEntry,
+  SnapshotsOverride,
 } from "./types";
 
 interface AsyncResource<T> {
@@ -464,8 +467,13 @@ export function usePatchSettings() {
   const [error, setError] = useState<string | null>(null);
 
   const patch = useCallback(async (
-    section: "schedule" | "classification",
-    body: ScheduleOverride | ClassificationOverride,
+    section: "schedule" | "classification" | "health" | "logging" | "snapshots",
+    body:
+      | ScheduleOverride
+      | ClassificationOverride
+      | HealthOverride
+      | LoggingOverride
+      | SnapshotsOverride,
   ): Promise<SettingsResponse> => {
     setBusy(true);
     setError(null);

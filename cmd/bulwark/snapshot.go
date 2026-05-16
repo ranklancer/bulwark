@@ -82,7 +82,11 @@ func resolveBackend(deps snapshotDeps, configPath string, logger *slog.Logger) (
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: load config: %w", err)
 	}
-	b := buildSnapshotBackend(loaded, logger)
+	// `bulwark snapshot` is a CLI subcommand without a --data-dir flag,
+	// so it can't read the encrypted configstore. Falls back to
+	// yaml-only snapshot config — operators who manage snapshots via
+	// the dashboard should use the dashboard's UI instead of this CLI.
+	b := buildSnapshotBackend(loaded, nil, logger)
 	if b == nil {
 		return nil, errors.New("snapshot: no backend configured (set snapshots.backend in config)")
 	}

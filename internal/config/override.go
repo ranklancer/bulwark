@@ -18,6 +18,39 @@ package config
 type UISettings struct {
 	Schedule       *ScheduleUISettings
 	Classification *ClassificationUISettings
+	Health         *HealthUISettings
+	Logging        *LoggingUISettings
+	Snapshots      *SnapshotsUISettings
+}
+
+// HealthUISettings mirrors configstore.HealthOverride.
+type HealthUISettings struct {
+	Timeout     *string
+	Interval    *string
+	Threshold   *int
+	GracePeriod *string
+}
+
+// LoggingUISettings mirrors configstore.LoggingOverride.
+type LoggingUISettings struct {
+	Level  *string
+	Format *string
+}
+
+// SnapshotsUISettings mirrors configstore.SnapshotsOverride.
+type SnapshotsUISettings struct {
+	Backend *string
+	Proxmox *ProxmoxUISettings
+}
+
+// ProxmoxUISettings mirrors configstore.ProxmoxOverride.
+type ProxmoxUISettings struct {
+	URL         *string
+	Token       *string
+	Node        *string
+	VMID        *int
+	Kind        *string
+	InsecureTLS *bool
 }
 
 // ScheduleUISettings mirrors configstore.ScheduleOverride.
@@ -90,6 +123,54 @@ func (c *Config) WithUISettings(o *UISettings) *Config {
 				p.Prerelease = *o.Classification.Policies.Prerelease
 			}
 			out.Classification.Policies = p
+		}
+	}
+	if o.Health != nil {
+		if o.Health.Timeout != nil {
+			out.Health.Timeout = *o.Health.Timeout
+		}
+		if o.Health.Interval != nil {
+			out.Health.Interval = *o.Health.Interval
+		}
+		if o.Health.Threshold != nil {
+			out.Health.Threshold = *o.Health.Threshold
+		}
+		if o.Health.GracePeriod != nil {
+			out.Health.GracePeriod = *o.Health.GracePeriod
+		}
+	}
+	if o.Logging != nil {
+		if o.Logging.Level != nil {
+			out.Logging.Level = *o.Logging.Level
+		}
+		if o.Logging.Format != nil {
+			out.Logging.Format = *o.Logging.Format
+		}
+	}
+	if o.Snapshots != nil {
+		if o.Snapshots.Backend != nil {
+			out.Snapshots.Backend = *o.Snapshots.Backend
+		}
+		if o.Snapshots.Proxmox != nil {
+			p := &out.Snapshots.Proxmox
+			if o.Snapshots.Proxmox.URL != nil {
+				p.URL = *o.Snapshots.Proxmox.URL
+			}
+			if o.Snapshots.Proxmox.Token != nil {
+				p.Token = *o.Snapshots.Proxmox.Token
+			}
+			if o.Snapshots.Proxmox.Node != nil {
+				p.Node = *o.Snapshots.Proxmox.Node
+			}
+			if o.Snapshots.Proxmox.VMID != nil {
+				p.VMID = *o.Snapshots.Proxmox.VMID
+			}
+			if o.Snapshots.Proxmox.Kind != nil {
+				p.Kind = *o.Snapshots.Proxmox.Kind
+			}
+			if o.Snapshots.Proxmox.InsecureTLS != nil {
+				p.InsecureTLS = *o.Snapshots.Proxmox.InsecureTLS
+			}
 		}
 	}
 	return &out

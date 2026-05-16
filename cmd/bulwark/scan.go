@@ -15,6 +15,7 @@ import (
 
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/configstore"
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
@@ -179,7 +180,9 @@ Flags:`)
 		// *docker.Client provides. Production paths construct a real client
 		// when --apply is set; tests inject one via deps.
 		if dc, ok := dockerClient.(*docker.Client); ok {
-			snapBackend := buildSnapshotBackend(loaded, logger)
+			// scan.go's one-shot CLI doesn't have a daemon-owned
+			// configstore; pass nil so only yaml is consulted.
+			snapBackend := buildSnapshotBackend(loaded, nil, logger)
 			upd = &updater.Updater{
 				Docker:        dc,
 				Snapshots:     snapBackend,
@@ -261,9 +264,17 @@ func filterByDedup(st *store.Store, events []notifier.Event, now time.Time, ttl 
 // the matching backend, or nil if disabled / unsupported on this host.
 // Failures are warnings — the daemon falls back to "no snapshots" rather
 // than aborting startup.
-func buildSnapshotBackend(loaded *config.Config, logger *slog.Logger) snapshot.Backend {
+//
+// When cs is non-nil, snapshot fields from the encrypted configstore
+// (the dashboard's Snapshots editor) merge on top of the yaml-loaded
+// base. This is how the UI-editable Proxmox token reaches the
+// backend without ever appearing in bulwark.yaml.
+func buildSnapshotBackend(loaded *config.Config, cs *configstore.Store, logger *slog.Logger) snapshot.Backend {
 	if loaded == nil {
 		return nil
+	}
+	if cs != nil {
+		loaded = loaded.WithUISettings(cs.Settings().ToUISettings())
 	}
 	name := strings.ToLower(strings.TrimSpace(loaded.Snapshots.Backend))
 	var b snapshot.Backend
