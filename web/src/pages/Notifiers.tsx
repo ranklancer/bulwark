@@ -23,6 +23,7 @@ export default function Notifiers() {
   const { remove, busy: deletingID, error: deleteError } = useDeleteNotifier();
   const [lastSent, setLastSent] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editID, setEditID] = useState<string | undefined>(undefined);
 
   async function onTest(name: string) {
     setLastSent(null);
@@ -58,7 +59,13 @@ export default function Notifiers() {
             <code className="mx-1">bulwark.yaml</code>.
           </p>
         </div>
-        <Button variant="primary" onClick={() => setModalOpen(true)}>
+        <Button
+          variant="primary"
+          onClick={() => {
+            setEditID(undefined);
+            setModalOpen(true);
+          }}
+        >
           Add notifier
         </Button>
       </div>
@@ -128,15 +135,27 @@ export default function Notifiers() {
                       Send test
                     </Button>
                     {!isYAML && n.id && (
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        onClick={() => onDelete(n.id!, n.name)}
-                        disabled={deletingID === n.id}
-                      >
-                        {deletingID === n.id ? <Spinner /> : null}
-                        Delete
-                      </Button>
+                      <>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => {
+                            setEditID(n.id);
+                            setModalOpen(true);
+                          }}
+                        >
+                          Edit
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => onDelete(n.id!, n.name)}
+                          disabled={deletingID === n.id}
+                        >
+                          {deletingID === n.id ? <Spinner /> : null}
+                          Delete
+                        </Button>
+                      </>
                     )}
                   </div>
                 </CardBody>
@@ -154,7 +173,11 @@ export default function Notifiers() {
 
       <AddNotifierModal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        editID={editID}
+        onClose={() => {
+          setModalOpen(false);
+          setEditID(undefined);
+        }}
         onCreated={() => void refresh()}
       />
     </div>

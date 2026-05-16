@@ -132,6 +132,17 @@ func (r *Registry) Entries() []Entry {
 	return out
 }
 
+// FindStoreEntry returns the underlying configstore.NotifierEntry for a
+// UI-managed notifier. Used by the dashboard's edit-form pre-fill: it
+// needs the raw entry shape (including type-specific settings), not the
+// runtime Notifier interface FindUIEntry returns.
+func (r *Registry) FindStoreEntry(id string) (configstore.NotifierEntry, bool) {
+	if r.store == nil {
+		return configstore.NotifierEntry{}, false
+	}
+	return r.store.FindNotifier(id)
+}
+
 // FindUIEntry looks up a UI-managed entry by ID. Returns false when the
 // ID names a yaml entry (yaml entries are immutable from this API) or
 // when no entry matches.
@@ -227,6 +238,41 @@ func (r *Registry) AddUI(entry configstore.NotifierEntry) error {
 	})
 	if err != nil {
 		return err
+	}
+	return r.Reload()
+}
+
+// UpdateUI replaces an existing UI-managed notifier in-place. The ID and
+// CreatedAt timestamps are preserved from the existing entry; everything
+// else comes from the incoming entry (including a refreshed UpdatedAt).
+// Returns an error when the ID does not match an existing UI entry or
+// when validation fails.
+func (r *Registry) UpdateUI(entry configstore.NotifierEntry) error {
+	if r.store == nil {
+		return ErrUIWritesDisabled
+	}
+	if err := entry.Validate(); err != nil {
+		return err
+	}
+	found := false
+	_, err := r.store.Mutate(func(d *configstore.Data) error {
+		for i, existing := range d.Notifiers {
+			if existing.ID == entry.ID {
+				entry.CreatedAt = existing.CreatedAt
+				d.Notifiers[i] = entry
+				found = true
+				return nil
+			}
+		}
+		return fmt.Errorf("notifier: no UI entry with id %q", entry.ID)
+	})
+	if err != nil {
+		return err
+	}
+	if !found {
+		// Mutate should have returned an error already in this case;
+		// this is a defensive sanity check.
+		return fmt.Errorf("notifier: no UI entry with id %q", entry.ID)
 	}
 	return r.Reload()
 }

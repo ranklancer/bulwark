@@ -97,6 +97,85 @@ func (h *StateHandler) createNotifier(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// getNotifier returns the full editable shape of a single UI-managed
+// notifier so the dashboard can pre-fill its edit form. Secrets are
+// returned as-is here (no redaction) because the operator is the same
+// person who created them; redaction lives in the YAML-config view
+// instead. Yaml-defined notifiers are not addressable by ID and return
+// 404 — operators edit those via the YAML file.
+func (h *StateHandler) getNotifier(w http.ResponseWriter, r *http.Request) {
+	if h.Registry == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errEnvelope(notifier.ErrUIWritesDisabled))
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errEnvelope(errors.New("notifier id is required")))
+		return
+	}
+	entry, ok := h.Registry.FindStoreEntry(id)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, errEnvelope(fmt.Errorf("no notifier with id %q", id)))
+		return
+	}
+	writeJSON(w, http.StatusOK, entry)
+}
+
+func (h *StateHandler) updateNotifier(w http.ResponseWriter, r *http.Request) {
+	if h.Registry == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errEnvelope(notifier.ErrUIWritesDisabled))
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, errEnvelope(errors.New("notifier id is required")))
+		return
+	}
+	defer r.Body.Close()
+	var req notifierCreateRequest
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, errEnvelope(fmt.Errorf("decode body: %w", err)))
+		return
+	}
+	entry, err := req.toEntry()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errEnvelope(err))
+		return
+	}
+	// Use the URL's ID, not whatever the client guessed (or didn't send).
+	entry.ID = id
+	if err := h.Registry.UpdateUI(entry); err != nil {
+		// "no UI entry with id ..." → 404; everything else (validation)
+		// → 400. The string-match is uglier than a typed error but the
+		// Registry currently returns formatted errors and a typed
+		// sentinel is a wider refactor than this hot patch deserves.
+		if strings.Contains(err.Error(), "no UI entry") {
+			writeJSON(w, http.StatusNotFound, errEnvelope(err))
+			return
+		}
+		writeJSON(w, http.StatusBadRequest, errEnvelope(err))
+		return
+	}
+	if h.Store != nil {
+		h.Store.Audit(store.AuditEvent{
+			Action:    store.ActionNotifierUpdated,
+			Container: entry.Name,
+			Detail:    fmt.Sprintf("kind=%s id=%s", entry.Kind, entry.ID),
+		})
+	}
+	if h.Events != nil {
+		h.Events.Publish(notifierEventConfigChanged(entry.ID, "updated"))
+	}
+	writeJSON(w, http.StatusOK, notifierView{
+		ID:       entry.ID,
+		Source:   string(notifier.SourceUI),
+		Name:     entry.Name,
+		MinLevel: configstoreMinLevel(entry.MinLevel),
+	})
+}
+
 func (h *StateHandler) deleteNotifier(w http.ResponseWriter, r *http.Request) {
 	if h.Registry == nil {
 		writeJSON(w, http.StatusServiceUnavailable, errEnvelope(notifier.ErrUIWritesDisabled))

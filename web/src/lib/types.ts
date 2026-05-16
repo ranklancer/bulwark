@@ -86,6 +86,68 @@ export type NotifierKind =
   | "smtp"
   | "homeassistant";
 
+export interface NotifierEntryDetail {
+  id: string;
+  name: string;
+  kind: NotifierKind;
+  min_level: string;
+  enabled: boolean;
+  slack?: { webhook_url: string; channel?: string };
+  discord?: { webhook_url: string };
+  teams?: { webhook_url: string };
+  smtp?: {
+    host: string;
+    port: number;
+    username?: string;
+    password?: string;
+    from: string;
+    to: string[];
+    tls?: boolean;
+  };
+  homeassistant?: { url: string; token: string };
+}
+
+export interface SettingsSection {
+  name: string;
+  restart_required: boolean;
+}
+
+export interface PolicyOverride {
+  patch?: string;
+  minor?: string;
+  major?: string;
+  digest?: string;
+  latest?: string;
+  lsio_rebuild?: string;
+  prerelease?: string;
+}
+
+export interface ClassificationOverride {
+  default_risk?: string;
+  policies?: PolicyOverride;
+  changelog_max_chars?: number;
+}
+
+export interface ScheduleOverride {
+  check?: string;
+}
+
+export interface SettingsOverride {
+  schedule?: ScheduleOverride;
+  classification?: ClassificationOverride;
+  updated_at?: string;
+}
+
+export interface SettingsResponse {
+  settings: SettingsOverride;
+  sections: SettingsSection[];
+}
+
+export interface EffectiveConfigResponse {
+  config: unknown;
+  overridden_sections: string[];
+}
+
 export interface NotifierCreateRequest {
   name: string;
   kind: NotifierKind;

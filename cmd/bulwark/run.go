@@ -270,12 +270,23 @@ Flags:`)
 		if dockerClient == nil {
 			return nil
 		}
+		// Build the effective config for this scan by layering the
+		// UI-managed settings overrides on top of the yaml-loaded base.
+		// Read from the configstore here (rather than caching the merged
+		// pointer) so dashboard mutations propagate to the next cycle
+		// without restart.
+		effective := loaded
+		effectiveClassifier := cfg
+		if configStore != nil {
+			effective = loaded.WithUISettings(configStore.Settings().ToUISettings())
+			effectiveClassifier = effective.ClassifierConfig()
+		}
 		scn := &scanner.Scanner{
 			Docker:      dockerClient,
 			Registry:    regClient,
 			Notes:       notesFetcher,
-			Classifier:  classifier.New(cfg),
-			Config:      loaded,
+			Classifier:  classifier.New(effectiveClassifier),
+			Config:      effective,
 			Concurrency: *concurrency,
 		}
 		cycle, err := runScanCycle(ctx, scanCycleConfig{
@@ -286,7 +297,7 @@ Flags:`)
 			Updater:            upd,
 			Apply:              *apply,
 			DryRun:             *dryRun,
-			MaintenanceWindows: parseMaintenanceWindows(loaded, logger),
+			MaintenanceWindows: parseMaintenanceWindows(effective, logger),
 			DigestBuffer:       digestBuf,
 			Events:             eventBus,
 			Now:                deps.Now,
@@ -363,8 +374,14 @@ Flags:`)
 		Dispatcher:       dispatcher,
 		Registry:         notifierRegistry,
 		LoadedConfig:     loaded,
+		ConfigStore:      configStore,
 		SnapshotBackend:  buildSnapshotBackend(loaded, logger),
 		Events:           eventBus,
+		// ReloadConfig is a no-op for now: scanJob re-reads the configstore
+		// at use time so classification changes already take effect on the
+		// next cycle. Subsystems that cache config (scheduler cron) live
+		// in the "restart required" bucket — documented in the UI.
+		ReloadConfig: func() {},
 	}
 	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
 

@@ -22,11 +22,11 @@ const FileName = "config.enc"
 const dataVersion = 1
 
 // Data is the in-memory representation of the encrypted store. New
-// UI-managed sections get added here as their phases land; for now only
-// notifiers are in scope.
+// UI-managed sections get added here as their phases land.
 type Data struct {
-	Version   int                `json:"version"`
-	Notifiers []NotifierEntry    `json:"notifiers,omitempty"`
+	Version   int              `json:"version"`
+	Notifiers []NotifierEntry  `json:"notifiers,omitempty"`
+	Settings  SettingsOverride `json:"settings,omitempty"`
 }
 
 // Store is a thread-safe, AES-GCM-encrypted JSON file store.
@@ -84,6 +84,19 @@ func (s *Store) Notifiers() []NotifierEntry {
 	out := make([]NotifierEntry, len(s.data.Notifiers))
 	copy(out, s.data.Notifiers)
 	return out
+}
+
+// FindNotifier returns the notifier with the given ID. The second return
+// value reports whether a match was found.
+func (s *Store) FindNotifier(id string) (NotifierEntry, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, n := range s.data.Notifiers {
+		if n.ID == id {
+			return n, true
+		}
+	}
+	return NotifierEntry{}, false
 }
 
 // load reads and decrypts the on-disk blob into s.data. A missing file is
@@ -170,7 +183,7 @@ func (s *Store) Mutate(fn func(*Data) error) (Data, error) {
 }
 
 func (d Data) clone() Data {
-	out := Data{Version: d.Version}
+	out := Data{Version: d.Version, Settings: d.Settings.clone()}
 	if len(d.Notifiers) > 0 {
 		out.Notifiers = make([]NotifierEntry, len(d.Notifiers))
 		copy(out.Notifiers, d.Notifiers)

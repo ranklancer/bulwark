@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/configstore"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/snapshot"
 	"github.com/bulwark-docker/bulwark/internal/store"
@@ -76,6 +77,21 @@ type StateHandler struct {
 	// and trigger a registry reload. nil leaves notifier config
 	// strictly yaml-driven (legacy / GitOps deployments).
 	Registry *notifier.Registry
+
+	// ConfigStore, when set, exposes UI-mutable subsets of the
+	// configuration (settings overrides on top of the yaml-loaded
+	// LoadedConfig). The dashboard's Settings page hits the
+	// PATCH /api/v1/config/{section} endpoints; the daemon's hot
+	// paths (scan, classify) read the merged config via
+	// ConfigStore.Settings() at use time so changes take effect on
+	// the next cycle without a restart.
+	ConfigStore *configstore.Store
+
+	// ReloadConfig is fired after a successful PATCH so daemon
+	// subsystems can rebuild any state derived from the merged
+	// config (rate limiter, scheduler cron, etc.). nil is fine;
+	// most subsystems read configstore at use-time anyway.
+	ReloadConfig func()
 
 	// LoadedConfig, when set, is exposed (with secrets redacted) via
 	// GET /api/v1/config and feeds the GET /api/v1/policies effective-
@@ -143,12 +159,23 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 		// listNotifiers as read-only "managed by YAML" cards; these
 		// routes write to the encrypted configstore + reload.
 		mux.HandleFunc("POST /api/v1/notifiers", h.authed(h.csrfProtect(h.createNotifier)))
+		mux.HandleFunc("GET /api/v1/notifiers/{id}", h.authed(h.getNotifier))
+		mux.HandleFunc("PATCH /api/v1/notifiers/{id}", h.authed(h.csrfProtect(h.updateNotifier)))
 		mux.HandleFunc("DELETE /api/v1/notifiers/{id}", h.authed(h.csrfProtect(h.deleteNotifier)))
 		mux.HandleFunc("POST /api/v1/notifiers/test", h.authed(h.csrfProtect(h.testEphemeralNotifier)))
 	}
 	if h.LoadedConfig != nil {
 		mux.HandleFunc("GET /api/v1/config", h.authed(h.getConfig))
 		mux.HandleFunc("GET /api/v1/policies", h.authed(h.getPolicies))
+	}
+	if h.ConfigStore != nil && h.LoadedConfig != nil {
+		// UI-driven config: editable subset of bulwark.yaml. Overrides
+		// live in the encrypted configstore and merge on top of the
+		// yaml-loaded base at use-time. Sections not listed in
+		// configstore.SettingsSections stay yaml-only by design.
+		mux.HandleFunc("GET /api/v1/config/effective", h.authed(h.getEffectiveConfig))
+		mux.HandleFunc("GET /api/v1/config/settings", h.authed(h.getSettings))
+		mux.HandleFunc("PATCH /api/v1/config/{section}", h.authed(h.csrfProtect(h.patchSettingsSection)))
 	}
 	if h.SnapshotBackend != nil {
 		mux.HandleFunc("GET /api/v1/snapshots", h.authed(h.listSnapshots))

@@ -1,13 +1,24 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { useCreateNotifier, useTestEphemeralNotifier } from "@/lib/hooks";
+import {
+  useCreateNotifier,
+  useNotifierDetail,
+  useTestEphemeralNotifier,
+  useUpdateNotifier,
+} from "@/lib/hooks";
 import type { NotifierCreateRequest, NotifierKind } from "@/lib/types";
 
 interface Props {
   open: boolean;
   onClose: () => void;
   onCreated: () => void;
+  /**
+   * When set, the modal renders in "edit" mode: it fetches the
+   * existing entry by id, pre-fills the form, and saves via PATCH.
+   * When undefined, the modal creates a new entry via POST.
+   */
+  editID?: string;
 }
 
 type FormState = {
@@ -51,10 +62,45 @@ const INITIAL: FormState = {
  * delivery before saving. "Save" persists via POST /api/v1/notifiers
  * and triggers a registry reload daemon-side.
  */
-export function AddNotifierModal({ open, onClose, onCreated }: Props) {
+export function AddNotifierModal({ open, onClose, onCreated, editID }: Props) {
+  const isEdit = Boolean(editID);
   const [form, setForm] = useState<FormState>(INITIAL);
-  const { create, busy: saving, error: createError } = useCreateNotifier();
+  const { create, busy: creating, error: createError } = useCreateNotifier();
+  const { update, busy: updating, error: updateError } = useUpdateNotifier();
   const { send: testSend, busy: testing, error: testError, ok: testOk } = useTestEphemeralNotifier();
+  const { data: detail, loading: loadingDetail } = useNotifierDetail(open && editID ? editID : null);
+  const saving = creating || updating;
+  const saveError = createError || updateError;
+
+  // Hydrate the form when an existing notifier loads.
+  useEffect(() => {
+    if (!detail) return;
+    setForm({
+      name: detail.name,
+      kind: detail.kind,
+      minLevel: (detail.min_level as FormState["minLevel"]) || "review",
+      webhookURL:
+        detail.slack?.webhook_url ??
+        detail.discord?.webhook_url ??
+        detail.teams?.webhook_url ??
+        "",
+      slackChannel: detail.slack?.channel ?? "",
+      smtpHost: detail.smtp?.host ?? "",
+      smtpPort: String(detail.smtp?.port ?? 587),
+      smtpUsername: detail.smtp?.username ?? "",
+      smtpPassword: detail.smtp?.password ?? "",
+      smtpFrom: detail.smtp?.from ?? "",
+      smtpTo: (detail.smtp?.to ?? []).join(", "),
+      smtpTLS: detail.smtp?.tls ?? true,
+      haURL: detail.homeassistant?.url ?? "",
+      haToken: detail.homeassistant?.token ?? "",
+    });
+  }, [detail]);
+
+  // Reset to defaults when re-opening for a new entry.
+  useEffect(() => {
+    if (open && !editID) setForm(INITIAL);
+  }, [open, editID]);
 
   if (!open) return null;
 
@@ -126,12 +172,16 @@ export function AddNotifierModal({ open, onClose, onCreated }: Props) {
     const req = buildRequest();
     if (!req) return;
     try {
-      await create(req);
+      if (editID) {
+        await update(editID, req);
+      } else {
+        await create(req);
+      }
       onCreated();
       reset();
       onClose();
     } catch {
-      // createError is rendered inline.
+      // saveError is rendered inline.
     }
   }
 
@@ -147,11 +197,24 @@ export function AddNotifierModal({ open, onClose, onCreated }: Props) {
       aria-modal="true"
     >
       <div className="w-full max-w-lg rounded-lg border border-border bg-background p-6 shadow-lg">
-        <h2 className="text-lg font-semibold tracking-tight">Add notifier</h2>
+        <h2 className="text-lg font-semibold tracking-tight">
+          {isEdit ? "Edit notifier" : "Add notifier"}
+        </h2>
         <p className="mt-1 text-xs text-muted-foreground">
-          New notifiers persist to the encrypted config store at
-          <code className="mx-1">{"<datadir>/config.enc"}</code>. The daemon picks them up immediately — no restart required.
+          {isEdit
+            ? "Changes persist to the encrypted config store and reload immediately — no restart required."
+            : "New notifiers persist to the encrypted config store at "}
+          {!isEdit && (
+            <>
+              <code className="mx-1">{"<datadir>/config.enc"}</code>. The daemon picks them up immediately — no restart required.
+            </>
+          )}
         </p>
+        {loadingDetail ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            <Spinner /> Loading existing values…
+          </p>
+        ) : null}
 
         <div className="mt-4 space-y-3">
           <Field label="Name">
@@ -301,9 +364,9 @@ export function AddNotifierModal({ open, onClose, onCreated }: Props) {
             </>
           )}
 
-          {createError && (
+          {saveError && (
             <p className="text-sm text-red-600" role="alert">
-              {createError}
+              {saveError}
             </p>
           )}
           {testError && (

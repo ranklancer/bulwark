@@ -47,7 +47,9 @@ const (
 	ActionStackSkipped     = "apply.stack_skipped"
 	ActionScanRecorded     = "scan.recorded"
 	ActionNotifierCreated  = "notifier.created"
+	ActionNotifierUpdated  = "notifier.updated"
 	ActionNotifierDeleted  = "notifier.deleted"
+	ActionConfigUpdated    = "config.updated"
 )
 
 // auditPath is where the JSONL log lives.

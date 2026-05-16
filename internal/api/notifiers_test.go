@@ -230,6 +230,117 @@ func TestStateAPI_TestEphemeralNotifier(t *testing.T) {
 	}
 }
 
+func TestStateAPI_UpdateNotifier(t *testing.T) {
+	reg, _ := newRegistryForTests(t, nil)
+	h := &StateHandler{Store: stateFixture(t), Auth: AnonymousAuth{}, Registry: reg, Dispatcher: reg.Dispatcher()}
+	srv := newStateServer(t, h)
+
+	id := mustCreate(t, srv, `{"name":"orig","kind":"slack","enabled":true,"slack":{"webhook_url":"https://hooks.slack.com/services/T/B/x"}}`)
+
+	body := strings.NewReader(`{
+		"name": "renamed",
+		"kind": "slack",
+		"min_level": "breaking",
+		"enabled": true,
+		"slack": {"webhook_url": "https://hooks.slack.com/services/T/B/y"}
+	}`)
+	req, _ := http.NewRequest("PATCH", srv.URL+"/api/v1/notifiers/"+id, body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", srv.URL)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("PATCH = %d, body=%s", resp.StatusCode, raw)
+	}
+	var updated notifierView
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != id {
+		t.Errorf("ID changed: %s → %s", id, updated.ID)
+	}
+	if updated.Name != "renamed" {
+		t.Errorf("name not updated: %q", updated.Name)
+	}
+	if updated.MinLevel != "breaking" {
+		t.Errorf("min_level not updated: %q", updated.MinLevel)
+	}
+
+	// GET should reflect the new settings.
+	getResp, err := srv.Client().Get(srv.URL + "/api/v1/notifiers/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d", getResp.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(getResp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	slack, ok := got["slack"].(map[string]any)
+	if !ok {
+		t.Fatalf("response missing slack: %+v", got)
+	}
+	if slack["webhook_url"] != "https://hooks.slack.com/services/T/B/y" {
+		t.Errorf("webhook_url not updated: %v", slack["webhook_url"])
+	}
+}
+
+func TestStateAPI_UpdateNotifier_UnknownIDReturns404(t *testing.T) {
+	reg, _ := newRegistryForTests(t, nil)
+	h := &StateHandler{Store: stateFixture(t), Auth: AnonymousAuth{}, Registry: reg, Dispatcher: reg.Dispatcher()}
+	srv := newStateServer(t, h)
+	req, _ := http.NewRequest("PATCH", srv.URL+"/api/v1/notifiers/nonexistent",
+		strings.NewReader(`{"name":"x","kind":"slack","enabled":true,"slack":{"webhook_url":"https://hooks.slack.com/services/T/B/z"}}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", srv.URL)
+	resp, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("PATCH unknown id = %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestStateAPI_GetNotifier(t *testing.T) {
+	reg, _ := newRegistryForTests(t, nil)
+	h := &StateHandler{Store: stateFixture(t), Auth: AnonymousAuth{}, Registry: reg, Dispatcher: reg.Dispatcher()}
+	srv := newStateServer(t, h)
+
+	id := mustCreate(t, srv, `{"name":"x","kind":"slack","enabled":true,"slack":{"webhook_url":"https://hooks.slack.com/services/T/B/abc"}}`)
+
+	resp, err := srv.Client().Get(srv.URL + "/api/v1/notifiers/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var got map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got["id"] != id {
+		t.Errorf("id = %v, want %s", got["id"], id)
+	}
+	slack, ok := got["slack"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing slack section: %+v", got)
+	}
+	if slack["webhook_url"] != "https://hooks.slack.com/services/T/B/abc" {
+		t.Errorf("webhook_url = %v", slack["webhook_url"])
+	}
+}
+
 func mustCreate(t *testing.T, srv *httptest.Server, payload string) string {
 	t.Helper()
 	req, _ := http.NewRequest("POST", srv.URL+"/api/v1/notifiers", strings.NewReader(payload))

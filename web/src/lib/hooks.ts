@@ -2,11 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import { api, apiJson } from "./api";
 import type {
   AuditEvent,
+  ClassificationOverride,
   ContainerEntry,
+  EffectiveConfigResponse,
   NotifierCreateRequest,
   NotifierEntry,
+  NotifierEntryDetail,
   QueueRow,
   ScanRecord,
+  ScheduleOverride,
+  SettingsResponse,
   SnapshotEntry,
 } from "./types";
 
@@ -292,6 +297,129 @@ export function useTestEphemeralNotifier() {
   }, []);
 
   return { send, busy, error, ok };
+}
+
+/**
+ * useUpdateNotifier wraps PATCH /api/v1/notifiers/{id} for editing
+ * an existing UI-managed notifier. Yaml-defined notifiers cannot be
+ * updated via this API.
+ */
+export function useUpdateNotifier() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const update = useCallback(async (id: string, req: NotifierCreateRequest): Promise<NotifierEntry> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api(`/notifiers/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: JSON.stringify(req),
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(extractError(body, res.status));
+      }
+      return (await res.json()) as NotifierEntry;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return { update, busy, error };
+}
+
+/**
+ * useNotifierDetail fetches the full editable shape of a single
+ * UI-managed notifier (used to pre-fill the edit form).
+ */
+export function useNotifierDetail(id: string | null) {
+  const [data, setData] = useState<NotifierEntryDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!id) {
+      setData(null);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    (async () => {
+      try {
+        const body = await apiJson<NotifierEntryDetail>(`/notifiers/${encodeURIComponent(id)}`);
+        if (!cancelled) setData(body);
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
+  return { data, loading, error };
+}
+
+/**
+ * useSettings wraps GET /api/v1/config/settings and returns both the
+ * current override payload and the section metadata (restart-required
+ * etc.) the dashboard needs to render tabs + banners.
+ */
+export function useSettings() {
+  return useResource<SettingsResponse>("/config/settings");
+}
+
+/**
+ * useEffectiveConfig returns the post-merge yaml-style tree (with
+ * secrets redacted) for the Settings page's "Advanced YAML" view.
+ */
+export function useEffectiveConfig() {
+  return useResource<EffectiveConfigResponse>("/config/effective");
+}
+
+/**
+ * usePatchSettings issues PATCH /api/v1/config/{section}. Each call
+ * applies a partial section update — the server merges with what's
+ * already persisted, so the caller only sends fields that changed.
+ */
+export function usePatchSettings() {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const patch = useCallback(async (
+    section: "schedule" | "classification",
+    body: ScheduleOverride | ClassificationOverride,
+  ): Promise<SettingsResponse> => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api(`/config/${encodeURIComponent(section)}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(extractError(text, res.status));
+      }
+      return (await res.json()) as SettingsResponse;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  return { patch, busy, error };
 }
 
 function extractError(body: string, fallbackStatus: number): string {

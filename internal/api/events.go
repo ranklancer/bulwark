@@ -21,6 +21,7 @@ const (
 	EventApplyStackSkipped    = "apply.stack_skipped"
 	EventNotificationsCleared = "notifications.cleared"
 	EventNotifierConfig       = "notifier.config_changed"
+	EventConfigUpdated        = "config.updated"
 )
 
 // Event is one item streamed to subscribed dashboard clients. Time is
