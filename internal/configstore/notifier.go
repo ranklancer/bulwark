@@ -25,12 +25,13 @@ const (
 	KindTeams         NotifierKind = "teams"
 	KindSMTP          NotifierKind = "smtp"
 	KindHomeAssistant NotifierKind = "homeassistant"
+	KindNtfy          NotifierKind = "ntfy"
 )
 
 // KnownKinds returns the kinds the store currently knows how to validate.
 // Anything outside this set is rejected at write time.
 func KnownKinds() []NotifierKind {
-	return []NotifierKind{KindSlack, KindDiscord, KindTeams, KindSMTP, KindHomeAssistant}
+	return []NotifierKind{KindSlack, KindDiscord, KindTeams, KindSMTP, KindHomeAssistant, KindNtfy}
 }
 
 // NotifierEntry is one UI-managed notifier. Per-kind settings live in
@@ -54,6 +55,17 @@ type NotifierEntry struct {
 	Teams         *TeamsSettings         `json:"teams,omitempty"`
 	SMTP          *SMTPSettings          `json:"smtp,omitempty"`
 	HomeAssistant *HomeAssistantSettings `json:"homeassistant,omitempty"`
+	Ntfy          *NtfySettings          `json:"ntfy,omitempty"`
+}
+
+// NtfySettings carries ntfy publish-server fields. ServerURL is the
+// base (e.g. "https://ntfy.sh" or "https://ntfy.example.com"); Topic
+// is the bare topic name (no leading slash); Token is an optional
+// bearer access token issued by the ntfy server.
+type NtfySettings struct {
+	ServerURL string `json:"server_url"`
+	Topic     string `json:"topic"`
+	Token     string `json:"token,omitempty"`
 }
 
 // SlackSettings carries Slack-specific fields. WebhookURL is the secret;
@@ -197,6 +209,22 @@ func (e *NotifierEntry) Validate() error {
 		if !nilOthers(e, KindHomeAssistant) {
 			return errors.New("non-homeassistant settings present on a homeassistant notifier")
 		}
+	case KindNtfy:
+		if e.Ntfy == nil {
+			return errors.New("ntfy settings are required for kind=ntfy")
+		}
+		if err := validateAbsoluteURL("ntfy.server_url", e.Ntfy.ServerURL); err != nil {
+			return err
+		}
+		if strings.TrimSpace(e.Ntfy.Topic) == "" {
+			return errors.New("ntfy.topic is required")
+		}
+		if strings.ContainsAny(e.Ntfy.Topic, "/ \t") {
+			return fmt.Errorf("ntfy.topic %q must not contain slashes or whitespace", e.Ntfy.Topic)
+		}
+		if !nilOthers(e, KindNtfy) {
+			return errors.New("non-ntfy settings present on an ntfy notifier")
+		}
 	default:
 		return fmt.Errorf("unknown notifier kind %q (known: %v)", e.Kind, KnownKinds())
 	}
@@ -217,6 +245,9 @@ func nilOthers(e *NotifierEntry, keep NotifierKind) bool {
 		return false
 	}
 	if keep != KindHomeAssistant && e.HomeAssistant != nil {
+		return false
+	}
+	if keep != KindNtfy && e.Ntfy != nil {
 		return false
 	}
 	return true

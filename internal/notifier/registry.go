@@ -195,6 +195,8 @@ func BuildFromEntry(e configstore.NotifierEntry) (Notifier, error) {
 			Breaking: toYAMLHALevel(e.HomeAssistant.Breaking),
 			Rollback: toYAMLHALevel(e.HomeAssistant.Rollback),
 		}, e.Name)
+	case configstore.KindNtfy:
+		return NewNtfy(e.Ntfy.ServerURL, e.Ntfy.Topic, e.Ntfy.Token, min, e.Name)
 	}
 	return nil, fmt.Errorf("notifier: unknown kind %q", e.Kind)
 }

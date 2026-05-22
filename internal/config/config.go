@@ -160,9 +160,23 @@ type NotificationsConfig struct {
 	Slack         SlackConfig       `yaml:"slack"`
 	Discord       DiscordConfig     `yaml:"discord"`
 	SMTP          SMTPConfig        `yaml:"smtp"`
+	Ntfy          NtfyConfig        `yaml:"ntfy"`
 	Shoutrrr      ShoutrrrConfig    `yaml:"shoutrrr"`
 	Generic       []GenericConfig   `yaml:"generic"`
 	Digest        DigestConfig      `yaml:"digest"`
+}
+
+// NtfyConfig configures the ntfy push-notification integration. ServerURL
+// points at the publish endpoint (e.g. https://ntfy.sh or a self-hosted
+// instance); Topic is the topic name (no leading slash); Token is the
+// optional bearer access token. Use ${ENV_VAR} substitution for the
+// token so secrets stay out of the committed yaml.
+type NtfyConfig struct {
+	Enabled   bool   `yaml:"enabled"`
+	ServerURL string `yaml:"server_url"`
+	Topic     string `yaml:"topic"`
+	Token     string `yaml:"token"`
+	MinLevel  string `yaml:"min_level"`
 }
 
 // GenericConfig configures a single arbitrary HTTP webhook channel. Multiple

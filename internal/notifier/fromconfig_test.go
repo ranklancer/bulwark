@@ -37,12 +37,17 @@ func TestFromConfig_BuildsEnabledChannels(t *testing.T) {
 		{Enabled: false, Name: "disabled-one", URL: "https://noop.example.com/"},
 	}
 
+	c.Notifications.Ntfy.Enabled = true
+	c.Notifications.Ntfy.ServerURL = "https://ntfy.example.com"
+	c.Notifications.Ntfy.Topic = "bulwark"
+	c.Notifications.Ntfy.MinLevel = "safe"
+
 	got, err := FromConfig(c)
 	if err != nil {
 		t.Fatalf("FromConfig: %v", err)
 	}
-	if len(got) != 3 {
-		t.Fatalf("notifier count = %d, want 3 (slack + discord + 1 enabled generic)", len(got))
+	if len(got) != 4 {
+		t.Fatalf("notifier count = %d, want 4 (slack + discord + 1 enabled generic + ntfy)", len(got))
 	}
 	// Order: slack, discord, generic.
 	if got[0].Name() != "slack" {
@@ -58,8 +63,18 @@ func TestFromConfig_BuildsEnabledChannels(t *testing.T) {
 	if got[1].MinLevel() != types.RiskReview {
 		t.Errorf("discord default min = %v, want Review", got[1].MinLevel())
 	}
-	if got[2].Name() != "homeassistant" {
-		t.Errorf("got[2].Name = %q", got[2].Name())
+	// Construction order in fromconfig.go: Slack, Discord, HA block,
+	// SMTP, Ntfy, Generic. With only Slack + Discord + Ntfy + 1
+	// enabled Generic, positions are 0=slack, 1=discord, 2=ntfy,
+	// 3=generic("homeassistant").
+	if got[2].Name() != "ntfy" {
+		t.Errorf("got[2].Name = %q, want ntfy", got[2].Name())
+	}
+	if got[2].MinLevel() != types.RiskSafe {
+		t.Errorf("ntfy min = %v, want Safe", got[2].MinLevel())
+	}
+	if got[3].Name() != "homeassistant" {
+		t.Errorf("got[3].Name = %q", got[3].Name())
 	}
 }
 

@@ -62,6 +62,21 @@ func FromConfig(c *config.Config) ([]Notifier, error) {
 			out = append(out, n)
 		}
 	}
+	if c.Notifications.Ntfy.Enabled {
+		min := parseMin(c.Notifications.Ntfy.MinLevel)
+		n, err := NewNtfy(
+			c.Notifications.Ntfy.ServerURL,
+			c.Notifications.Ntfy.Topic,
+			c.Notifications.Ntfy.Token,
+			min,
+			"ntfy",
+		)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("notifications.ntfy: %w", err))
+		} else {
+			out = append(out, n)
+		}
+	}
 	for i, gc := range c.Notifications.Generic {
 		if !gc.Enabled {
 			continue

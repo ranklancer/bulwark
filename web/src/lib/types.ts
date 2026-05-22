@@ -84,7 +84,8 @@ export type NotifierKind =
   | "discord"
   | "teams"
   | "smtp"
-  | "homeassistant";
+  | "homeassistant"
+  | "ntfy";
 
 export interface NotifierEntryDetail {
   id: string;
@@ -105,6 +106,7 @@ export interface NotifierEntryDetail {
     tls?: boolean;
   };
   homeassistant?: { url: string; token: string };
+  ntfy?: { server_url: string; topic: string; token?: string };
 }
 
 export interface SettingsSection {
@@ -213,6 +215,11 @@ export interface NotifierCreateRequest {
   homeassistant?: {
     url: string;
     token: string;
+  };
+  ntfy?: {
+    server_url: string;
+    topic: string;
+    token?: string;
   };
 }
 

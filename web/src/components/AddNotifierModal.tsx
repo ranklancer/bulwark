@@ -36,6 +36,9 @@ type FormState = {
   smtpTLS: boolean;
   haURL: string;
   haToken: string;
+  ntfyServer: string;
+  ntfyTopic: string;
+  ntfyToken: string;
 };
 
 const INITIAL: FormState = {
@@ -53,6 +56,9 @@ const INITIAL: FormState = {
   smtpTLS: true,
   haURL: "",
   haToken: "",
+  ntfyServer: "",
+  ntfyTopic: "",
+  ntfyToken: "",
 };
 
 /**
@@ -94,6 +100,9 @@ export function AddNotifierModal({ open, onClose, onCreated, editID }: Props) {
       smtpTLS: detail.smtp?.tls ?? true,
       haURL: detail.homeassistant?.url ?? "",
       haToken: detail.homeassistant?.token ?? "",
+      ntfyServer: detail.ntfy?.server_url ?? "",
+      ntfyTopic: detail.ntfy?.topic ?? "",
+      ntfyToken: detail.ntfy?.token ?? "",
     });
   }, [detail]);
 
@@ -139,6 +148,16 @@ export function AddNotifierModal({ open, onClose, onCreated, editID }: Props) {
           homeassistant: {
             url: form.haURL.trim(),
             token: form.haToken.trim(),
+          },
+        };
+      case "ntfy":
+        if (!form.ntfyServer.trim() || !form.ntfyTopic.trim()) return null;
+        return {
+          ...base,
+          ntfy: {
+            server_url: form.ntfyServer.trim(),
+            topic: form.ntfyTopic.trim(),
+            token: form.ntfyToken.trim() || undefined,
           },
         };
       case "smtp": {
@@ -237,6 +256,7 @@ export function AddNotifierModal({ open, onClose, onCreated, editID }: Props) {
               <option value="teams">Microsoft Teams</option>
               <option value="smtp">SMTP / Email</option>
               <option value="homeassistant">Home Assistant</option>
+              <option value="ntfy">ntfy</option>
             </select>
           </Field>
           <Field label="Minimum risk level">
@@ -292,6 +312,43 @@ export function AddNotifierModal({ open, onClose, onCreated, editID }: Props) {
                   onChange={(e) => setForm({ ...form, haToken: e.target.value })}
                   className={INPUT}
                 />
+              </Field>
+            </>
+          )}
+
+          {form.kind === "ntfy" && (
+            <>
+              <Field label="ntfy server URL">
+                <input
+                  type="url"
+                  value={form.ntfyServer}
+                  onChange={(e) => setForm({ ...form, ntfyServer: e.target.value })}
+                  className={INPUT}
+                  placeholder="https://ntfy.sh or https://ntfy.example.com"
+                />
+              </Field>
+              <Field label="Topic (bare name, no slashes)">
+                <input
+                  type="text"
+                  value={form.ntfyTopic}
+                  onChange={(e) => setForm({ ...form, ntfyTopic: e.target.value })}
+                  className={INPUT}
+                  placeholder="bulwark-alerts"
+                />
+              </Field>
+              <Field label="Access token (optional)">
+                <input
+                  type="password"
+                  value={form.ntfyToken}
+                  onChange={(e) => setForm({ ...form, ntfyToken: e.target.value })}
+                  className={INPUT}
+                  placeholder="tk_..."
+                  autoComplete="off"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Leave blank for public topics. Saved tokens display as{" "}
+                  <code>***</code> on edit; replace to rotate, blank to clear.
+                </p>
               </Field>
             </>
           )}

@@ -196,6 +196,42 @@ func TestNotifierEntry_Validate(t *testing.T) {
 	}
 }
 
+func TestNotifierEntry_Validate_NtfyRejectsBadInputs(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*NotifierEntry)
+		wantErr string
+	}{
+		{"missing settings", func(e *NotifierEntry) { e.Ntfy = nil }, "ntfy settings are required"},
+		{"missing server", func(e *NotifierEntry) { e.Ntfy.ServerURL = "" }, "must be an http or https URL"},
+		{"bad scheme", func(e *NotifierEntry) { e.Ntfy.ServerURL = "ftp://ntfy.sh" }, "must be an http or https URL"},
+		{"missing topic", func(e *NotifierEntry) { e.Ntfy.Topic = "" }, "ntfy.topic is required"},
+		{"topic with slash", func(e *NotifierEntry) { e.Ntfy.Topic = "bad/topic" }, "must not contain slashes"},
+		{"cross-kind block", func(e *NotifierEntry) {
+			e.Slack = &SlackSettings{WebhookURL: "https://hooks.slack.com/x"}
+		}, "non-ntfy settings"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := NotifierEntry{
+				ID:      mustID(t),
+				Name:    "ntfy-test",
+				Kind:    KindNtfy,
+				Enabled: true,
+				Ntfy:    &NtfySettings{ServerURL: "https://ntfy.example.com", Topic: "alerts"},
+			}
+			c.mutate(&e)
+			err := e.Validate()
+			if err == nil {
+				t.Fatalf("expected error %q", c.wantErr)
+			}
+			if !contains(err.Error(), c.wantErr) {
+				t.Errorf("err = %q, want substring %q", err.Error(), c.wantErr)
+			}
+		})
+	}
+}
+
 func TestNotifierEntry_Validate_OtherKinds(t *testing.T) {
 	cases := []NotifierEntry{
 		{ID: mustID(t), Name: "discord-ops", Kind: KindDiscord, Enabled: true,
@@ -206,6 +242,8 @@ func TestNotifierEntry_Validate_OtherKinds(t *testing.T) {
 			HomeAssistant: &HomeAssistantSettings{URL: "https://ha.local:8123", Token: "tok"}},
 		{ID: mustID(t), Name: "smtp-relay", Kind: KindSMTP, Enabled: true,
 			SMTP: &SMTPSettings{Host: "smtp.example.com", Port: 587, From: "bw@example.com", To: []string{"ops@example.com"}}},
+		{ID: mustID(t), Name: "ntfy-prod", Kind: KindNtfy, Enabled: true,
+			Ntfy: &NtfySettings{ServerURL: "https://ntfy.example.com", Topic: "bulwark", Token: "tk_abc"}},
 	}
 	for _, e := range cases {
 		if err := e.Validate(); err != nil {

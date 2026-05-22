@@ -27,6 +27,7 @@ type notifierCreateRequest struct {
 	Teams         *configstore.TeamsSettings             `json:"teams,omitempty"`
 	SMTP          *configstore.SMTPSettings              `json:"smtp,omitempty"`
 	HomeAssistant *configstore.HomeAssistantSettings     `json:"homeassistant,omitempty"`
+	Ntfy          *configstore.NtfySettings              `json:"ntfy,omitempty"`
 }
 
 // toEntry builds a configstore.NotifierEntry from the wire request.
@@ -52,6 +53,7 @@ func (req notifierCreateRequest) toEntry() (configstore.NotifierEntry, error) {
 		Teams:         req.Teams,
 		SMTP:          req.SMTP,
 		HomeAssistant: req.HomeAssistant,
+		Ntfy:          req.Ntfy,
 	}, nil
 }
 
