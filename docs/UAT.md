@@ -545,6 +545,58 @@ What to check:
 - A user in the IdP but NOT in `bulwark-operators` (or whichever
   group you set) gets 403.
 
+## 23. ntfy push notifications
+
+Verifies the ntfy integration end-to-end against a self-hosted
+server or `ntfy.sh`. Risk → priority/tag mapping is hardcoded in
+v1: BREAKING + rolled-back → priority 5 + 🚨, REVIEW → 4 + ⚠️,
+SAFE → 3 + 📦.
+
+```sh
+# Option A — quickest, public ntfy.sh + a random topic:
+#   1. On your phone, install the ntfy app and subscribe to
+#      "bulwark-uat-<a-random-suffix>".
+#   2. In the dashboard, /notifiers → Add notifier → kind = ntfy:
+#        server URL: https://ntfy.sh
+#        topic:      bulwark-uat-<a-random-suffix>
+#        token:      (blank — public topic)
+#   3. Click "Send test".
+
+# Option B — self-hosted, with auth:
+docker run -d --name ntfy -p 8085:80 binwiederhier/ntfy serve
+# Generate an access token via the ntfy CLI or web UI, then in the
+# dashboard set:
+#   server URL: http://<host>:8085
+#   topic:      bulwark
+#   token:      tk_...
+
+# Option C — yaml-driven:
+#   notifications:
+#     ntfy:
+#       enabled: true
+#       server_url: https://ntfy.example.com
+#       topic: bulwark
+#       token: ${NTFY_TOKEN}
+#       min_level: review
+#   Then restart the daemon; the channel appears in /notifiers with
+#   the "managed by YAML" badge.
+```
+
+What to check:
+
+- The synthetic test event arrives on your subscribed device with
+  the 🧪 (`test_tube`) tag — confirms the synthetic-bypass path.
+- Trigger a real scan that surfaces a REVIEW update; the
+  notification's priority is 4 and the tag is ⚠️ (`warning`).
+- Force a rollback (or test against a known-broken image): the
+  notification's priority is 5 and the tag is 🚨
+  (`rotating_light`). Action wins over risk.
+- If the scan result has release notes, tapping the phone
+  notification opens the release URL.
+- Saved tokens display as `***` in the edit form; leaving the
+  field untouched preserves the persisted secret. Typing a new
+  value replaces it; blanking it clears.
+
 ---
 
 ## Reporting issues

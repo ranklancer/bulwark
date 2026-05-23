@@ -181,6 +181,18 @@ notifications:
     to:       ["ops@example.com"]
     tls:      true
 
+  # ntfy push notifications (https://ntfy.sh, self-hostable). Topic is the
+  # bare topic name — no slashes, no whitespace. Token is optional; omit
+  # for public topics. Risk → priority/tag mapping is hardcoded:
+  # BREAKING/rolled-back → priority 5 + rotating_light tag, REVIEW →
+  # priority 4 + warning, SAFE → priority 3 + package.
+  ntfy:
+    enabled:    false
+    server_url: "https://ntfy.sh"     # or https://ntfy.example.com for self-hosted
+    topic:      "bulwark-alerts"
+    token:      "${BULWARK_NTFY_TOKEN}"
+    min_level:  review
+
   shoutrrr:
     enabled: false
     urls:    []
