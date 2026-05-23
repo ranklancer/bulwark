@@ -143,6 +143,62 @@ func TestMountUIRoutes_VanillaWhenReactPlaceholder(t *testing.T) {
 	}
 }
 
+// TestMountUIRoutes_CacheHeaders is a focused regression test for the
+// Cache-Control values served by every UI route. The SPA index must
+// never be cached (otherwise a release leaves browsers stuck on a
+// stale shell pointing at deleted hashed assets); hashed assets must
+// be cached aggressively (their filenames are content-addressed, so
+// changes always produce new URLs).
+func TestMountUIRoutes_CacheHeaders(t *testing.T) {
+	legacy := []byte(`<!doctype html><title>vanilla</title>`)
+	reactIndex := []byte(`<!doctype html><script type="module" src="/assets/index-abc.js"></script>`)
+	reactFS := fstest.MapFS{
+		"index.html":        &fstest.MapFile{Data: reactIndex},
+		"assets/index-abc.js": &fstest.MapFile{Data: []byte(`console.log("ok")`)},
+	}
+
+	mux := http.NewServeMux()
+	mountUIRoutes(mux, legacy, fs.FS(reactFS), reactIndex)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	checks := []struct {
+		name     string
+		path     string
+		wantCC   string
+		notWantCC string
+	}{
+		{
+			name:   "SPA index never cached",
+			path:   "/",
+			wantCC: "no-store",
+		},
+		{
+			name:   "legacy index never cached",
+			path:   "/legacy/",
+			wantCC: "no-store",
+		},
+		{
+			name:   "hashed asset immutable for a year",
+			path:   "/assets/index-abc.js",
+			wantCC: "public, max-age=31536000, immutable",
+		},
+	}
+	for _, ck := range checks {
+		t.Run(ck.name, func(t *testing.T) {
+			res, err := http.Get(srv.URL + ck.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			got := res.Header.Get("Cache-Control")
+			if got != ck.wantCC {
+				t.Errorf("Cache-Control = %q, want %q", got, ck.wantCC)
+			}
+		})
+	}
+}
+
 func TestPreloadLinkHeader(t *testing.T) {
 	cases := []struct {
 		name string
