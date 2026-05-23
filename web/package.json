@@ -9,7 +9,8 @@
     "prebuild": "rm -rf ../internal/api/ui-react/dist/assets",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "perf:check": "node scripts/perf-budget.mjs"
   },
   "dependencies": {
     "clsx": "^2.1.1",
