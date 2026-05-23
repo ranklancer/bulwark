@@ -9,7 +9,8 @@
     "prebuild": "rm -rf ../internal/api/ui-react/dist/assets",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "bundle:report": "vite-bundle-visualizer --output stats.html"
   },
   "dependencies": {
     "clsx": "^2.1.1",
@@ -27,6 +28,7 @@
     "postcss": "^8.4.47",
     "tailwindcss": "^3.4.13",
     "typescript": "^5.6.2",
-    "vite": "^6.4.2"
+    "vite": "^6.4.2",
+    "vite-bundle-visualizer": "^1.2.1"
   }
 }
