@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -140,6 +142,42 @@ func TestMountUIRoutes_VanillaWhenReactPlaceholder(t *testing.T) {
 	resLegacy.Body.Close()
 	if resLegacy.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /legacy/ in placeholder mode = %d, want 404", resLegacy.StatusCode)
+	}
+}
+
+// TestWithLogging_SkipsHealthAndReadyProbes asserts that /healthz and
+// /readyz produce zero log lines through withLogging, while every other
+// path produces exactly one. Probes flood the log otherwise on
+// long-running daemons.
+func TestWithLogging_SkipsHealthAndReadyProbes(t *testing.T) {
+	cases := []struct {
+		path    string
+		wantLog bool
+	}{
+		{"/healthz", false},
+		{"/readyz", false},
+		{"/", true},
+		{"/api/v1/anything", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, nil))
+			mux := http.NewServeMux()
+			mux.HandleFunc(tc.path, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("ok"))
+			})
+			h := withLogging(mux, logger)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", tc.path, nil)
+			h.ServeHTTP(rec, req)
+
+			got := strings.Contains(buf.String(), "api: handled")
+			if got != tc.wantLog {
+				t.Errorf("path %s: got log=%v, want log=%v (output: %q)", tc.path, got, tc.wantLog, buf.String())
+			}
+		})
 	}
 }
 

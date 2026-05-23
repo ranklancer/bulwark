@@ -129,11 +129,19 @@ func (s *Server) Run(ctx context.Context, shutdownTimeout time.Duration) error {
 // withLogging is a middleware that emits one structured log line per request.
 // It deliberately does NOT log full URLs or headers — webhook URLs and auth
 // tokens often appear there, and logs end up grep-able and shippable.
+//
+// /healthz and /readyz are skipped: they fire every 5–30 s in production
+// and dominate the access log without carrying any operator-relevant
+// signal. Real probe failures still surface via the response status that
+// the calling load balancer sees.
 func withLogging(h http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		h.ServeHTTP(rec, r)
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			return
+		}
 		logger.Info("api: handled",
 			"method", r.Method,
 			"path", r.URL.Path,
