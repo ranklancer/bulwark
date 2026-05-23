@@ -49,3 +49,29 @@ exceeds 40 KB gzipped. Override the defaults with
 `BULWARK_PERF_CSS_GZ_KB` env vars when ratcheting the gate down.
 
 CI runs `perf:check` on every PR.
+
+## Lighthouse CI
+
+```sh
+# In repo root: build the binary once
+go build -o bulwark ./cmd/bulwark
+
+cd web
+npm run build
+BULWARK_BIN=../bulwark npm run perf:lighthouse
+```
+
+LHCI spins up `bulwark serve --no-docker --listen :8080` (anonymous
+mode — never use this outside CI / dev), runs a desktop-preset
+Lighthouse pass against `http://localhost:8080/`, and asserts:
+
+| Metric | Threshold |
+|---|---:|
+| LCP | < 1500 ms |
+| Total transfer | < 500 KB |
+| CLS | < 0.1 |
+
+The CI workflow runs this best-effort (`continue-on-error: true`)
+while we accumulate a stable baseline; it'll flip to a hard gate
+once the numbers settle. LHCI ships via `npx` so it doesn't bloat
+`package-lock.json` with Puppeteer + Chromium.
