@@ -29,5 +29,17 @@ export default defineConfig({
     // build to keep local dist/ tidy.
     emptyOutDir: false,
     sourcemap: false,
+    rollupOptions: {
+      output: {
+        // Peel the runtime framework into its own chunk so app code
+        // churn (every release) doesn't bust the vendor cache. The
+        // vendor chunk only changes when React or react-router-dom
+        // upgrades, which is rare; operators get the long-tail cache
+        // benefit on every release.
+        manualChunks: {
+          vendor: ["react", "react-dom", "react-router-dom"],
+        },
+      },
+    },
   },
 });
