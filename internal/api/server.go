@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -237,7 +238,14 @@ func mountUIRoutes(mux *http.ServeMux, legacyIndex []byte, reactSub fs.FS, react
 		return
 	}
 
+	preloadHeader := preloadLinkHeader(reactIndex)
 	indexHandler := compressMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// modulepreload tells the browser to start fetching the entry
+		// chunk in parallel with HTML parse, saving an RTT on cold
+		// loads. Empty when the placeholder index is in play.
+		if preloadHeader != "" {
+			w.Header().Set("Link", preloadHeader)
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", uiCSP)
@@ -248,6 +256,27 @@ func mountUIRoutes(mux *http.ServeMux, legacyIndex []byte, reactSub fs.FS, react
 	// hash, so a year of immutable Cache-Control is correct + safe.
 	mux.Handle("GET /assets/", compressMiddleware(cacheImmutable(http.FileServer(http.FS(reactSub)))))
 	mux.Handle("GET /legacy/{$}", legacyHandler)
+}
+
+// preloadScriptRE captures the src of the entry-point script tag Vite
+// emits into index.html. The shape is stable across Vite versions:
+//
+//	<script type="module" crossorigin src="/assets/index-XXXXXXXX.js"></script>
+//
+// A regex is enough — there's exactly one such tag per build, and
+// pulling in an HTML parser for this would be wasteful.
+var preloadScriptRE = regexp.MustCompile(`<script[^>]*\bsrc="(/assets/[^"]+\.js)"`)
+
+// preloadLinkHeader returns the value to set in the response Link
+// header so the browser begins fetching the SPA's entry chunk in
+// parallel with HTML parse. Returns "" when no entry script is found
+// (e.g. the placeholder index ships nothing to preload).
+func preloadLinkHeader(indexHTML []byte) string {
+	m := preloadScriptRE.FindSubmatch(indexHTML)
+	if len(m) < 2 {
+		return ""
+	}
+	return "<" + string(m[1]) + ">; rel=modulepreload"
 }
 
 // cacheImmutable wraps a file-server handler with a long-lived

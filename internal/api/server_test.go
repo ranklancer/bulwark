@@ -143,6 +143,73 @@ func TestMountUIRoutes_VanillaWhenReactPlaceholder(t *testing.T) {
 	}
 }
 
+func TestPreloadLinkHeader(t *testing.T) {
+	cases := []struct {
+		name string
+		html string
+		want string
+	}{
+		{
+			name: "vite entry script is captured",
+			html: `<!doctype html><script type="module" crossorigin src="/assets/index-CjOw1M0x.js"></script>`,
+			want: "</assets/index-CjOw1M0x.js>; rel=modulepreload",
+		},
+		{
+			name: "alternate attribute order still works",
+			html: `<script src="/assets/index-abc.js" type="module"></script>`,
+			want: "</assets/index-abc.js>; rel=modulepreload",
+		},
+		{
+			name: "placeholder index returns empty",
+			html: `<!doctype html><body>no script here</body>`,
+			want: "",
+		},
+		{
+			name: "ignores non-asset script tags",
+			html: `<script src="/some/external.js"></script>`,
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := preloadLinkHeader([]byte(tc.html)); got != tc.want {
+				t.Errorf("preloadLinkHeader = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMountUIRoutes_ReactSpaSetsModulepreloadLink asserts the GET /
+// response includes the Link: rel=modulepreload header pointing at the
+// SPA's entry chunk, so the browser begins fetching it in parallel
+// with HTML parse.
+func TestMountUIRoutes_ReactSpaSetsModulepreloadLink(t *testing.T) {
+	legacy := []byte(`<!doctype html><title>vanilla</title>`)
+	reactIndex := []byte(`<!doctype html><html><head><script type="module" crossorigin src="/assets/index-CjOw1M0x.js"></script></head><body><div id="root"></div></body></html>`)
+	reactFS := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: reactIndex},
+	}
+
+	mux := http.NewServeMux()
+	mountUIRoutes(mux, legacy, fs.FS(reactFS), reactIndex)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+
+	link := res.Header.Get("Link")
+	if !strings.Contains(link, "rel=modulepreload") {
+		t.Errorf("Link = %q, want rel=modulepreload", link)
+	}
+	if !strings.Contains(link, "/assets/index-CjOw1M0x.js") {
+		t.Errorf("Link = %q, want entry script path", link)
+	}
+}
+
 // TestMountUIRoutes_ReactBuiltMountsBoth asserts the post-React-build
 // mode: "/" → React, "/legacy/" → vanilla, "/assets/<file>" → static
 // asset with immutable cache headers.
