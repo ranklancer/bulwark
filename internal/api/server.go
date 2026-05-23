@@ -219,29 +219,35 @@ func mountUI(mux *http.ServeMux, logger *slog.Logger) {
 // are both non-nil, the React SPA mounts at "/", its hashed assets at
 // "/assets/", and the legacy dashboard moves to "/legacy/{$}". Otherwise
 // the legacy dashboard stays at "/" with no other mount points.
+//
+// Every UI route is wrapped in compressMiddleware so the SPA bundle goes
+// out as brotli or gzip on the wire. API routes are deliberately NOT
+// compressed in this phase because the SSE stream at /api/v1/events
+// would buffer badly under encoding.
 func mountUIRoutes(mux *http.ServeMux, legacyIndex []byte, reactSub fs.FS, reactIndex []byte) {
-	legacyHandler := func(w http.ResponseWriter, _ *http.Request) {
+	legacyHandler := compressMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", uiCSP)
 		_, _ = w.Write(legacyIndex)
-	}
+	}))
 
 	if reactSub == nil || reactIndex == nil {
-		mux.HandleFunc("GET /{$}", legacyHandler)
+		mux.Handle("GET /{$}", legacyHandler)
 		return
 	}
 
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	indexHandler := compressMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", uiCSP)
 		_, _ = w.Write(reactIndex)
-	})
+	}))
+	mux.Handle("GET /{$}", indexHandler)
 	// Hashed-asset file server. Vite-emitted filenames carry a content
 	// hash, so a year of immutable Cache-Control is correct + safe.
-	mux.Handle("GET /assets/", cacheImmutable(http.FileServer(http.FS(reactSub))))
-	mux.HandleFunc("GET /legacy/{$}", legacyHandler)
+	mux.Handle("GET /assets/", compressMiddleware(cacheImmutable(http.FileServer(http.FS(reactSub)))))
+	mux.Handle("GET /legacy/{$}", legacyHandler)
 }
 
 // cacheImmutable wraps a file-server handler with a long-lived
