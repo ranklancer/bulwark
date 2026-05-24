@@ -53,6 +53,39 @@ jobs:
       - name: Scan for accidental PII
         run: ./scripts/check-pii.sh
 
+  perf:
+    name: perf budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build SPA
+        run: |
+          cd web
+          npm ci
+          npm run build
+
+      - name: Build bulwark binary
+        run: go build -o ./bulwark ./cmd/bulwark
+
+      - name: Bundle-size budget (hard fail)
+        run: cd web && npm run perf:check
+
+      - name: Lighthouse CI (best-effort baseline)
+        run: cd web && BULWARK_BIN=../bulwark npm run perf:lighthouse
+        continue-on-error: true
+
   docker-build:
     name: docker image build
     runs-on: ubuntu-latest

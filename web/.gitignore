@@ -8,3 +8,6 @@ vite.config.js
 .env.local
 # Local-only bundle treemap from `npm run bundle:report`.
 stats.html
+# Lighthouse CI output (local runs of `npm run perf:lighthouse`).
+lhci-output/
+.lighthouseci/

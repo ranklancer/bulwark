@@ -10,7 +10,9 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
     "preview": "vite preview",
-    "bundle:report": "vite-bundle-visualizer --output stats.html"
+    "bundle:report": "vite-bundle-visualizer --output stats.html",
+    "perf:check": "node scripts/perf-budget.mjs",
+    "perf:lighthouse": "npx --yes @lhci/cli@^0.13 autorun"
   },
   "dependencies": {
     "clsx": "^2.1.1",
