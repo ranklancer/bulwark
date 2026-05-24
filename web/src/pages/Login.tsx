@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { useLocation, useNavigate, type Location } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 
@@ -18,6 +18,17 @@ export default function Login() {
   const location = useLocation();
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
+
+  // Prefetch the lazy chunks an operator is most likely to visit
+  // after first login. They're fetched in parallel with the user
+  // typing their token; by the time they submit, the chunks are
+  // already in the module cache. Skipped for already-authed visits
+  // (e.g. forward-proxy deployments bouncing past /login).
+  useEffect(() => {
+    if (status !== "unauthenticated") return;
+    void import("@/pages/Audit");
+    void import("@/pages/Notifiers");
+  }, [status]);
 
   // If the user is already authenticated (e.g., logged in via a
   // forward-proxy that set Remote-User), bounce them to the
