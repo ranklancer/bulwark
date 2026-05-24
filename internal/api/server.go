@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -128,11 +129,19 @@ func (s *Server) Run(ctx context.Context, shutdownTimeout time.Duration) error {
 // withLogging is a middleware that emits one structured log line per request.
 // It deliberately does NOT log full URLs or headers — webhook URLs and auth
 // tokens often appear there, and logs end up grep-able and shippable.
+//
+// /healthz and /readyz are skipped: they fire every 5–30 s in production
+// and dominate the access log without carrying any operator-relevant
+// signal. Real probe failures still surface via the response status that
+// the calling load balancer sees.
 func withLogging(h http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		h.ServeHTTP(rec, r)
+		if r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+			return
+		}
 		logger.Info("api: handled",
 			"method", r.Method,
 			"path", r.URL.Path,
@@ -219,29 +228,63 @@ func mountUI(mux *http.ServeMux, logger *slog.Logger) {
 // are both non-nil, the React SPA mounts at "/", its hashed assets at
 // "/assets/", and the legacy dashboard moves to "/legacy/{$}". Otherwise
 // the legacy dashboard stays at "/" with no other mount points.
+//
+// Every UI route is wrapped in compressMiddleware so the SPA bundle goes
+// out as brotli or gzip on the wire. API routes are deliberately NOT
+// compressed in this phase because the SSE stream at /api/v1/events
+// would buffer badly under encoding.
 func mountUIRoutes(mux *http.ServeMux, legacyIndex []byte, reactSub fs.FS, reactIndex []byte) {
-	legacyHandler := func(w http.ResponseWriter, _ *http.Request) {
+	legacyHandler := compressMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", uiCSP)
 		_, _ = w.Write(legacyIndex)
-	}
+	}))
 
 	if reactSub == nil || reactIndex == nil {
-		mux.HandleFunc("GET /{$}", legacyHandler)
+		mux.Handle("GET /{$}", legacyHandler)
 		return
 	}
 
-	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+	preloadHeader := preloadLinkHeader(reactIndex)
+	indexHandler := compressMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// modulepreload tells the browser to start fetching the entry
+		// chunk in parallel with HTML parse, saving an RTT on cold
+		// loads. Empty when the placeholder index is in play.
+		if preloadHeader != "" {
+			w.Header().Set("Link", preloadHeader)
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Security-Policy", uiCSP)
 		_, _ = w.Write(reactIndex)
-	})
+	}))
+	mux.Handle("GET /{$}", indexHandler)
 	// Hashed-asset file server. Vite-emitted filenames carry a content
 	// hash, so a year of immutable Cache-Control is correct + safe.
-	mux.Handle("GET /assets/", cacheImmutable(http.FileServer(http.FS(reactSub))))
-	mux.HandleFunc("GET /legacy/{$}", legacyHandler)
+	mux.Handle("GET /assets/", compressMiddleware(cacheImmutable(http.FileServer(http.FS(reactSub)))))
+	mux.Handle("GET /legacy/{$}", legacyHandler)
+}
+
+// preloadScriptRE captures the src of the entry-point script tag Vite
+// emits into index.html. The shape is stable across Vite versions:
+//
+//	<script type="module" crossorigin src="/assets/index-XXXXXXXX.js"></script>
+//
+// A regex is enough — there's exactly one such tag per build, and
+// pulling in an HTML parser for this would be wasteful.
+var preloadScriptRE = regexp.MustCompile(`<script[^>]*\bsrc="(/assets/[^"]+\.js)"`)
+
+// preloadLinkHeader returns the value to set in the response Link
+// header so the browser begins fetching the SPA's entry chunk in
+// parallel with HTML parse. Returns "" when no entry script is found
+// (e.g. the placeholder index ships nothing to preload).
+func preloadLinkHeader(indexHTML []byte) string {
+	m := preloadScriptRE.FindSubmatch(indexHTML)
+	if len(m) < 2 {
+		return ""
+	}
+	return "<" + string(m[1]) + ">; rel=modulepreload"
 }
 
 // cacheImmutable wraps a file-server handler with a long-lived

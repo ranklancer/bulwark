@@ -1,9 +1,11 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -140,6 +142,165 @@ func TestMountUIRoutes_VanillaWhenReactPlaceholder(t *testing.T) {
 	resLegacy.Body.Close()
 	if resLegacy.StatusCode != http.StatusNotFound {
 		t.Errorf("GET /legacy/ in placeholder mode = %d, want 404", resLegacy.StatusCode)
+	}
+}
+
+// TestWithLogging_SkipsHealthAndReadyProbes asserts that /healthz and
+// /readyz produce zero log lines through withLogging, while every other
+// path produces exactly one. Probes flood the log otherwise on
+// long-running daemons.
+func TestWithLogging_SkipsHealthAndReadyProbes(t *testing.T) {
+	cases := []struct {
+		path    string
+		wantLog bool
+	}{
+		{"/healthz", false},
+		{"/readyz", false},
+		{"/", true},
+		{"/api/v1/anything", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, nil))
+			mux := http.NewServeMux()
+			mux.HandleFunc(tc.path, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("ok"))
+			})
+			h := withLogging(mux, logger)
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest("GET", tc.path, nil)
+			h.ServeHTTP(rec, req)
+
+			got := strings.Contains(buf.String(), "api: handled")
+			if got != tc.wantLog {
+				t.Errorf("path %s: got log=%v, want log=%v (output: %q)", tc.path, got, tc.wantLog, buf.String())
+			}
+		})
+	}
+}
+
+// TestMountUIRoutes_CacheHeaders is a focused regression test for the
+// Cache-Control values served by every UI route. The SPA index must
+// never be cached (otherwise a release leaves browsers stuck on a
+// stale shell pointing at deleted hashed assets); hashed assets must
+// be cached aggressively (their filenames are content-addressed, so
+// changes always produce new URLs).
+func TestMountUIRoutes_CacheHeaders(t *testing.T) {
+	legacy := []byte(`<!doctype html><title>vanilla</title>`)
+	reactIndex := []byte(`<!doctype html><script type="module" src="/assets/index-abc.js"></script>`)
+	reactFS := fstest.MapFS{
+		"index.html":        &fstest.MapFile{Data: reactIndex},
+		"assets/index-abc.js": &fstest.MapFile{Data: []byte(`console.log("ok")`)},
+	}
+
+	mux := http.NewServeMux()
+	mountUIRoutes(mux, legacy, fs.FS(reactFS), reactIndex)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	checks := []struct {
+		name     string
+		path     string
+		wantCC   string
+		notWantCC string
+	}{
+		{
+			name:   "SPA index never cached",
+			path:   "/",
+			wantCC: "no-store",
+		},
+		{
+			name:   "legacy index never cached",
+			path:   "/legacy/",
+			wantCC: "no-store",
+		},
+		{
+			name:   "hashed asset immutable for a year",
+			path:   "/assets/index-abc.js",
+			wantCC: "public, max-age=31536000, immutable",
+		},
+	}
+	for _, ck := range checks {
+		t.Run(ck.name, func(t *testing.T) {
+			res, err := http.Get(srv.URL + ck.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res.Body.Close()
+			got := res.Header.Get("Cache-Control")
+			if got != ck.wantCC {
+				t.Errorf("Cache-Control = %q, want %q", got, ck.wantCC)
+			}
+		})
+	}
+}
+
+func TestPreloadLinkHeader(t *testing.T) {
+	cases := []struct {
+		name string
+		html string
+		want string
+	}{
+		{
+			name: "vite entry script is captured",
+			html: `<!doctype html><script type="module" crossorigin src="/assets/index-CjOw1M0x.js"></script>`,
+			want: "</assets/index-CjOw1M0x.js>; rel=modulepreload",
+		},
+		{
+			name: "alternate attribute order still works",
+			html: `<script src="/assets/index-abc.js" type="module"></script>`,
+			want: "</assets/index-abc.js>; rel=modulepreload",
+		},
+		{
+			name: "placeholder index returns empty",
+			html: `<!doctype html><body>no script here</body>`,
+			want: "",
+		},
+		{
+			name: "ignores non-asset script tags",
+			html: `<script src="/some/external.js"></script>`,
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := preloadLinkHeader([]byte(tc.html)); got != tc.want {
+				t.Errorf("preloadLinkHeader = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMountUIRoutes_ReactSpaSetsModulepreloadLink asserts the GET /
+// response includes the Link: rel=modulepreload header pointing at the
+// SPA's entry chunk, so the browser begins fetching it in parallel
+// with HTML parse.
+func TestMountUIRoutes_ReactSpaSetsModulepreloadLink(t *testing.T) {
+	legacy := []byte(`<!doctype html><title>vanilla</title>`)
+	reactIndex := []byte(`<!doctype html><html><head><script type="module" crossorigin src="/assets/index-CjOw1M0x.js"></script></head><body><div id="root"></div></body></html>`)
+	reactFS := fstest.MapFS{
+		"index.html": &fstest.MapFile{Data: reactIndex},
+	}
+
+	mux := http.NewServeMux()
+	mountUIRoutes(mux, legacy, fs.FS(reactFS), reactIndex)
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	res, err := http.Get(srv.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+
+	link := res.Header.Get("Link")
+	if !strings.Contains(link, "rel=modulepreload") {
+		t.Errorf("Link = %q, want rel=modulepreload", link)
+	}
+	if !strings.Contains(link, "/assets/index-CjOw1M0x.js") {
+		t.Errorf("Link = %q, want entry script path", link)
 	}
 }
 
