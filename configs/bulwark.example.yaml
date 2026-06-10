@@ -297,6 +297,23 @@ api:
     # Per-event silencing when --data-dir is configured. "0" disables.
     dedup_ttl: "24h"
 
+# CVE / security-urgency axis (opt-in). Adds a "how badly do I need it?"
+# signal alongside the stability classification: when an update closes
+# CRITICAL/HIGH CVEs it is surfaced as security-urgent. Disabled by
+# default and never lowers a stability gate — it only escalates
+# attention. See issue #8 for the full roadmap.
+security:
+  enabled: false
+  severity_threshold: critical   # critical | high (high => critical+high count)
+  auto_apply_urgent_safe: false  # let CRITICAL-closing SAFE updates auto-apply
+  cve_source:
+    type: trivy                  # pluggable; trivy is the first backend
+    trivy:
+      # Directory of `trivy image --format json` reports. Use ${VAR}
+      # substitution so host paths stay out of the committed yaml.
+      report_dir: "${BULWARK_TRIVY_REPORT_DIR}"
+      # server_url: ""           # future: trivy --server mode
+
 # Structured logging configuration.
 logging:
   level:  info                        # debug | info | warn | error

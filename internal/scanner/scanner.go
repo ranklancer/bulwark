@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/bulwark-docker/bulwark/internal/classifier"
+	"github.com/bulwark-docker/bulwark/internal/cve"
 	"github.com/bulwark-docker/bulwark/internal/config"
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/registry"
@@ -50,6 +51,12 @@ type Scanner struct {
 	Classifier  *classifier.Classifier // required
 	Config      *config.Config         // optional; controls exclusion lists
 	Concurrency int                    // workers performing per-container network calls; defaults to 4
+
+	// CVE, when set, enables the security-urgency axis: after the stability
+	// verdict the scanner diffs the current vs candidate image's
+	// vulnerabilities and attaches a *types.SecurityAssessment. Optional.
+	CVE          cve.Source
+	CVEThreshold cve.Severity // minimum closed-CVE severity counted toward urgency
 }
 
 // Result is the per-container outcome of a scan.
@@ -209,6 +216,21 @@ func (s *Scanner) scanOne(ctx context.Context, c docker.Container) Result {
 		// the keyword scanner.
 		assessment.Level = overrides.RiskOverride
 		assessment.Rationale = fmt.Sprintf("Risk pinned to %s by container label. (%s)", overrides.RiskOverride, assessment.Rationale)
+	}
+	// Security-urgency axis (opt-in). With a CVE source wired, diff the
+	// current vs candidate image's vulnerabilities and attach the resulting
+	// urgency. This is additive: it never mutates assessment.Level. Lookup
+	// failures are non-fatal — the stability verdict still stands.
+	if s.CVE != nil && r.HasUpdate() {
+		curV, cerr := s.CVE.Vulns(ctx, current.Reference())
+		candV, nerr := s.CVE.Vulns(ctx, available.Reference())
+		if cerr == nil && nerr == nil {
+			sa := cve.AssessUpgrade(curV, candV, s.CVEThreshold)
+			if sa.ClosedCount > 0 {
+				sa.Source = "trivy"
+				assessment.Security = &sa
+			}
+		}
 	}
 	r.Assessment = assessment
 	return r

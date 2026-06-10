@@ -148,13 +148,16 @@ Flags:`)
 		defer func() { _ = st.Close() }()
 	}
 
+	cveSource, cveThreshold := buildCVESource(loaded)
 	scn := &scanner.Scanner{
-		Docker:      dockerClient,
-		Registry:    regClient,
-		Notes:       notesFetcher,
-		Classifier:  classifier.New(cfg),
-		Config:      loaded,
-		Concurrency: *concurrency,
+		Docker:       dockerClient,
+		Registry:     regClient,
+		Notes:        notesFetcher,
+		Classifier:   classifier.New(cfg),
+		Config:       loaded,
+		Concurrency:  *concurrency,
+		CVE:          cveSource,
+		CVEThreshold: cveThreshold,
 	}
 
 	var dispatcher *notifier.Dispatcher

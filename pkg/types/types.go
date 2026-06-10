@@ -3,7 +3,9 @@
 package types
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -259,6 +261,123 @@ type RiskAssessment struct {
 	ReleaseURL    string
 	Changelog     string // truncated excerpt suitable for notification rendering
 	MatchedTokens []string
+
+	// Security is the optional security-urgency verdict, attached when a
+	// CVE source is configured. It is orthogonal to Level (stability):
+	// it escalates attention but never lowers a stability gate. Nil when
+	// no CVE source is wired or the update closes nothing at threshold.
+	Security *SecurityAssessment `json:"Security,omitempty"`
+}
+
+// SecurityUrgency is the security-driven priority of an update, orthogonal
+// to RiskLevel. It only escalates attention; it never lowers a gate.
+type SecurityUrgency int
+
+const (
+	UrgencyNone        SecurityUrgency = iota
+	UrgencyRecommended                 // update closes HIGH-severity CVEs
+	UrgencyUrgent                      // update closes CRITICAL-severity CVEs
+)
+
+func (u SecurityUrgency) String() string {
+	switch u {
+	case UrgencyRecommended:
+		return "recommended"
+	case UrgencyUrgent:
+		return "urgent"
+	default:
+		return "none"
+	}
+}
+
+// MarshalJSON renders SecurityUrgency as its lowercase string form.
+func (u SecurityUrgency) MarshalJSON() ([]byte, error) {
+	return []byte(strconv.Quote(u.String())), nil
+}
+
+// UnmarshalJSON accepts the string form and the legacy numeric form.
+func (u *SecurityUrgency) UnmarshalJSON(b []byte) error {
+	if len(b) == 0 || string(b) == "null" {
+		*u = UrgencyNone
+		return nil
+	}
+	if b[0] == '"' {
+		s, err := strconv.Unquote(string(b))
+		if err != nil {
+			return err
+		}
+		switch s {
+		case "recommended":
+			*u = UrgencyRecommended
+		case "urgent":
+			*u = UrgencyUrgent
+		default:
+			*u = UrgencyNone
+		}
+		return nil
+	}
+	n, err := strconv.Atoi(string(b))
+	if err != nil {
+		return err
+	}
+	*u = SecurityUrgency(n)
+	return nil
+}
+
+// ClosedVuln is a single vulnerability an update closes (present in the
+// current image, absent in the candidate). Severity is the lowercase
+// string form so this core package stays free of any scanner enum.
+type ClosedVuln struct {
+	ID       string `json:"id"`
+	Severity string `json:"severity"`
+	PkgName  string `json:"pkg_name,omitempty"`
+	Title    string `json:"title,omitempty"`
+}
+
+// SecurityAssessment describes which CVEs an update closes and how urgent
+// applying it therefore is.
+type SecurityAssessment struct {
+	Urgency         SecurityUrgency `json:"urgency"`
+	ClosedCount     int             `json:"closed_count"`
+	CriticalClosed  int             `json:"critical_closed"`
+	HighClosed      int             `json:"high_closed"`
+	HighestSeverity string          `json:"highest_severity,omitempty"`
+	Source          string          `json:"source,omitempty"`
+	Closed          []ClosedVuln    `json:"closed,omitempty"`
+}
+
+// Summary renders a one-line human-readable summary, e.g.
+// "security-urgent: closes 2 CRITICAL, 5 HIGH (trivy)". Returns "" when
+// the update closes nothing.
+func (s *SecurityAssessment) Summary() string {
+	if s == nil || s.ClosedCount == 0 {
+		return ""
+	}
+	var b strings.Builder
+	switch s.Urgency {
+	case UrgencyUrgent:
+		b.WriteString("security-urgent: ")
+	case UrgencyRecommended:
+		b.WriteString("security-recommended: ")
+	default:
+		b.WriteString("security: ")
+	}
+	b.WriteString("closes ")
+	parts := make([]string, 0, 2)
+	if s.CriticalClosed > 0 {
+		parts = append(parts, fmt.Sprintf("%d CRITICAL", s.CriticalClosed))
+	}
+	if s.HighClosed > 0 {
+		parts = append(parts, fmt.Sprintf("%d HIGH", s.HighClosed))
+	}
+	if len(parts) == 0 {
+		parts = append(parts, fmt.Sprintf("%d CVE", s.ClosedCount))
+	}
+	b.WriteString(strings.Join(parts, ", "))
+	if s.Source != "" {
+		b.WriteString(" (" + s.Source + ")")
+	}
+	return b.String()
 }
 
 // UpdateAction describes what was done (or would be done) for a pending update.

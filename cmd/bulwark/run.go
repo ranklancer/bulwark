@@ -27,6 +27,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
+	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
 // runDeps lets tests substitute every networked component for `bulwark run`.
@@ -283,6 +284,10 @@ Flags:`)
 		}
 	}
 
+	// CVE/security-urgency source (opt-in via the security block). Built
+	// once; nil + no-op when disabled.
+	cveSource, cveThreshold := buildCVESource(loaded)
+
 	scanJob := func(ctx context.Context) error {
 		if dockerClient == nil {
 			return nil
@@ -311,12 +316,14 @@ Flags:`)
 			}
 		}
 		scn := &scanner.Scanner{
-			Docker:      dockerClient,
-			Registry:    regClient,
-			Notes:       notesFetcher,
-			Classifier:  classifier.New(effectiveClassifier),
-			Config:      effective,
-			Concurrency: *concurrency,
+			Docker:       dockerClient,
+			Registry:     regClient,
+			Notes:        notesFetcher,
+			Classifier:   classifier.New(effectiveClassifier),
+			Config:       effective,
+			Concurrency:  *concurrency,
+			CVE:          cveSource,
+			CVEThreshold: cveThreshold,
 		}
 		// snapshotOverrides lets the apply pipeline read per-container
 		// UI overrides from the configstore. A nil configstore yields
@@ -352,6 +359,12 @@ Flags:`)
 		// stdout-as-prometheus-source-of-truth setups, so it's just one
 		// line per cycle.
 		pending, breaking, review, safe := summarize(cycle.Results)
+		securityUrgent := 0
+		for i := range cycle.Results {
+			if a := cycle.Results[i].Assessment; a != nil && a.Security != nil && a.Security.Urgency >= types.UrgencyRecommended {
+				securityUrgent++
+			}
+		}
 		logger.Info("run: scan cycle complete",
 			"results", len(cycle.Results),
 			"pending", pending,
@@ -360,6 +373,7 @@ Flags:`)
 			"safe", safe,
 			"silenced", cycle.DedupSilenced,
 			"digest_queued", cycle.DigestQueued,
+			"security_urgent", securityUrgent,
 		)
 		return nil
 	}

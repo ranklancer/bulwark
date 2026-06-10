@@ -35,6 +35,35 @@ type Config struct {
 	API            APIConfig            `yaml:"api"`
 	Registries     RegistriesConfig     `yaml:"registries"`
 	Logging        LoggingConfig        `yaml:"logging"`
+	Security       SecurityConfig       `yaml:"security"`
+}
+
+// SecurityConfig is the opt-in CVE/security-urgency block. When Enabled is
+// false (the default) Bulwark behaves exactly as before. It adds a
+// security-urgency axis to decisions without touching the stability gate.
+type SecurityConfig struct {
+	Enabled             bool            `yaml:"enabled"`
+	// SeverityThreshold is the minimum severity of a CLOSED CVE that counts
+	// toward urgency: "critical" (default) or "high" (critical+high).
+	SeverityThreshold   string          `yaml:"severity_threshold"`
+	// AutoApplyUrgentSafe lets CRITICAL-closing SAFE updates auto-apply on a
+	// tighter schedule. Off by default; consumed by later milestones.
+	AutoApplyUrgentSafe bool            `yaml:"auto_apply_urgent_safe"`
+	CVESource           CVESourceConfig `yaml:"cve_source"`
+}
+
+// CVESourceConfig selects the pluggable vulnerability backend.
+type CVESourceConfig struct {
+	Type  string            `yaml:"type"` // "trivy" (first/only backend today)
+	Trivy TrivySourceConfig `yaml:"trivy"`
+}
+
+// TrivySourceConfig configures the Trivy backend. ReportDir points at a
+// directory of `trivy image --format json` reports; ServerURL is reserved
+// for a future Trivy-server mode.
+type TrivySourceConfig struct {
+	ReportDir string `yaml:"report_dir"`
+	ServerURL string `yaml:"server_url"`
 }
 
 // RegistriesConfig controls how Bulwark authenticates against
@@ -462,6 +491,33 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateAuth(); err != nil {
 		return err
+	}
+	if err := c.validateSecurity(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateSecurity rejects a malformed security block at startup so an
+// operator who thinks they enabled CVE intelligence doesn't silently get
+// nothing. No-op when security.enabled is false.
+func (c *Config) validateSecurity() error {
+	if !c.Security.Enabled {
+		return nil
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Security.SeverityThreshold)) {
+	case "", "critical", "high":
+	default:
+		return fmt.Errorf("security.severity_threshold %q is not critical or high", c.Security.SeverityThreshold)
+	}
+	t := strings.ToLower(strings.TrimSpace(c.Security.CVESource.Type))
+	switch t {
+	case "", "trivy":
+	default:
+		return fmt.Errorf("security.cve_source.type %q is not supported (valid: trivy)", c.Security.CVESource.Type)
+	}
+	if (t == "" || t == "trivy") && c.Security.CVESource.Trivy.ReportDir == "" && c.Security.CVESource.Trivy.ServerURL == "" {
+		return fmt.Errorf("security.cve_source.trivy requires report_dir (or server_url) when security.enabled=true")
 	}
 	return nil
 }
