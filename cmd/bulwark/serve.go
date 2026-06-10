@@ -93,6 +93,9 @@ Flags:`)
 		if !flagPassed(fs, "listen") && loaded.API.Listen != "" {
 			*listen = loaded.API.Listen
 		}
+		if !flagPassed(fs, "docker-host") && loaded.Docker.Host != "" {
+			*dockerHost = loaded.Docker.Host
+		}
 		if !flagPassed(fs, "diun-token") && loaded.API.DIUN.Token != "" {
 			*diunToken = loaded.API.DIUN.Token
 		}
@@ -170,6 +173,9 @@ Flags:`)
 
 	auth, err := buildAuthenticator(loaded, *diunToken, logger)
 	if err != nil {
+		return fmt.Errorf("serve: %w", err)
+	}
+	if err := enforceAnonymousBinding(auth, *listen, loaded, logger); err != nil {
 		return fmt.Errorf("serve: %w", err)
 	}
 	var sessions *api.SessionScheme

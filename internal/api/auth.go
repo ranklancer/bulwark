@@ -55,9 +55,9 @@ type Authenticator interface {
 }
 
 // AnonymousAuth allows every request and returns an empty Identity.
-// Production deployments should NOT use this when the listener is reachable
-// from beyond localhost — `bulwark serve` and `bulwark run` warn at startup
-// when this combination is detected.
+// Production deployments must NOT use this when the listener is reachable
+// from beyond localhost — `bulwark serve` and `bulwark run` REFUSE to start
+// in that case unless api.auth.allow_anonymous=true is explicitly set.
 type AnonymousAuth struct{}
 
 func (AnonymousAuth) Authenticate(_ *http.Request) (Identity, error) {

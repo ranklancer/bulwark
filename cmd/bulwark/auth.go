@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/api"
@@ -163,4 +164,75 @@ func buildAuthenticator(cfg *config.Config, fallbackBearer string, logger *slog.
 
 	// Validate() should have caught everything else; defensive belt and braces.
 	return nil, fmt.Errorf("api.auth.type=%q is not supported (validation should have caught this)", t)
+}
+
+
+// isLoopbackListen reports whether listen binds only the loopback interface.
+// A bare ":8080", "0.0.0.0:8080", "[::]:8080" or "*" binds all interfaces and
+// is treated as non-loopback. A host we can't parse as an IP is treated
+// conservatively as non-loopback so the secure default errs toward refusing.
+func isLoopbackListen(listen string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(listen))
+	if err != nil {
+		host = strings.TrimSpace(listen)
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	switch host {
+	case "", "0.0.0.0", "::", "*":
+		return false
+	case "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// enforceAnonymousBinding implements Bulwark's secure-by-default posture for
+// the control surface: an anonymous (api.auth.type=none) API may bind only the
+// loopback interface. On any non-loopback bind it refuses to start unless the
+// operator has explicitly set api.auth.allow_anonymous=true (the documented
+// "auth is terminated at a trusted reverse proxy" escape hatch). Non-anonymous
+// authenticators always pass.
+func enforceAnonymousBinding(auth api.Authenticator, listen string, cfg *config.Config, logger *slog.Logger) error {
+	if _, anon := auth.(api.AnonymousAuth); !anon {
+		return nil
+	}
+	if isLoopbackListen(listen) {
+		return nil
+	}
+	if cfg != nil && cfg.API.Auth.AllowAnonymous {
+		logger.Warn("api: anonymous access on a non-loopback listener — allowed only because api.auth.allow_anonymous=true; ensure a trusted reverse proxy terminates authentication",
+			"listen", listen)
+		return nil
+	}
+	return fmt.Errorf("api.auth.type=none refuses to bind non-loopback address %q: an anonymous control surface would be exposed. Set api.auth.type=bearer or forward-proxy, bind to 127.0.0.1, or set api.auth.allow_anonymous=true to override", listen)
+}
+
+// enforceSnapshotApply applies the same secure-by-default posture to
+// auto-apply: with --apply enabled but no snapshot backend configured,
+// auto-acted SAFE updates would not be filesystem-recoverable. Bulwark
+// refuses --apply in that case unless snapshots.allow_apply_without_backend
+// is explicitly set. A nil config (no --config file) is treated as
+// backend=none.
+func enforceSnapshotApply(apply bool, cfg *config.Config) error {
+	if !apply {
+		return nil
+	}
+	backend := ""
+	allow := false
+	if cfg != nil {
+		backend = strings.ToLower(strings.TrimSpace(cfg.Snapshots.Backend))
+		allow = cfg.Snapshots.AllowApplyWithoutBackend
+	}
+	switch backend {
+	case "", "none":
+		if allow {
+			return nil
+		}
+		return fmt.Errorf("--apply refuses to run without a snapshot backend: auto-applied updates would not be filesystem-recoverable. Configure snapshots.backend (zfs/btrfs/lvm/restic/volume), or set snapshots.allow_apply_without_backend=true to accept container-level rollback only")
+	default:
+		return nil
+	}
 }

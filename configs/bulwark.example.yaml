@@ -2,9 +2,16 @@
 # example and remove blocks you don't need. All examples below use RFC-reserved
 # IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) and example.com domains.
 
-# How Bulwark connects to Docker.
+# How Bulwark connects to Docker. The recommended (and example-compose)
+# deployment talks to a docker-socket-proxy over TCP rather than bind-mounting
+# the raw /var/run/docker.sock into Bulwark: the proxy exposes only the
+# read-only API sections Bulwark needs (plus POST when you run with --apply),
+# so a compromised Bulwark cannot drive the daemon. See
+# docker-compose.example.yaml for the matching socket-proxy service.
 docker:
-  host: unix:///var/run/docker.sock
+  host: tcp://socket-proxy:2375
+  # Host-local install without a proxy? Use the raw socket instead:
+  # host: unix:///var/run/docker.sock
   tls:
     enabled: false
     cert: ""
@@ -70,6 +77,11 @@ classification:
 # volume (Docker volume export), or "none" to disable.
 snapshots:
   backend: none
+  # Secure-by-default guard: `bulwark run --apply` REFUSES to start when no
+  # snapshot backend is configured, because auto-applied SAFE updates would
+  # not be filesystem-recoverable. Configure a backend below, or explicitly
+  # accept container-level rollback only by setting this true.
+  allow_apply_without_backend: false
   zfs:
     datasets: []
   btrfs:
@@ -232,7 +244,8 @@ api:
 
   # Authentication for the state API + dashboard. Three modes:
   #
-  #   none           anonymous; safe ONLY when bound to localhost
+  #   none           anonymous; REFUSED on a non-loopback bind unless
+  #                  allow_anonymous: true (secure-by-default; see below)
   #   bearer         single shared-secret token (machine-to-machine)
   #   forward-proxy  trust identity headers from a reverse proxy that
   #                  terminates SSO/MFA upstream (Authelia, Authentik,
@@ -243,6 +256,12 @@ api:
   # forward-proxy mode. See docs/DEPLOY.md for an Authelia recipe.
   auth:
     type: none
+
+    # Secure-by-default guard: with type=none, `bulwark serve`/`run` REFUSE to
+    # start when api.listen binds anything other than loopback (127.0.0.1/::1).
+    # Set true ONLY when a trusted reverse proxy terminates auth in front of
+    # Bulwark and you accept anonymous access on the bound interface.
+    allow_anonymous: false
 
     # For type=bearer
     token: "${BULWARK_API_TOKEN}"

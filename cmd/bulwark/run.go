@@ -119,6 +119,9 @@ Flags:`)
 		if !flagPassed(fs, "listen") && loaded.API.Listen != "" {
 			*listen = loaded.API.Listen
 		}
+		if !flagPassed(fs, "docker-host") && loaded.Docker.Host != "" {
+			*dockerHost = loaded.Docker.Host
+		}
 		if !flagPassed(fs, "diun-token") && loaded.API.DIUN.Token != "" {
 			*diunToken = loaded.API.DIUN.Token
 		}
@@ -258,6 +261,9 @@ Flags:`)
 		logger.Warn("run: load mount table failed; auto-snapshot disabled", "err", mtErr)
 	}
 
+	if err := enforceSnapshotApply(*apply, loaded); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
 	var upd *updater.Updater
 	if *apply {
 		if dc, ok := dockerClient.(*docker.Client); ok {
@@ -384,6 +390,9 @@ Flags:`)
 	}
 	auth, err := buildAuthenticator(loaded, *diunToken, logger)
 	if err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	if err := enforceAnonymousBinding(auth, *listen, loaded, logger); err != nil {
 		return fmt.Errorf("run: %w", err)
 	}
 	// Sessions are enabled whenever the inner authenticator is anything

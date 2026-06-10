@@ -110,6 +110,11 @@ type PolicyConfig struct {
 
 type SnapshotsConfig struct {
 	Backend   string `yaml:"backend"`
+	// AllowApplyWithoutBackend permits `--apply` when Backend is
+	// "none". Default false: auto-applied SAFE updates would not be
+	// filesystem-recoverable without a snapshot backend, so Bulwark
+	// refuses --apply unless this is explicitly set.
+	AllowApplyWithoutBackend bool `yaml:"allow_apply_without_backend"`
 	ZFS       struct {
 		Datasets []string `yaml:"datasets"`
 	} `yaml:"zfs"`
@@ -288,6 +293,12 @@ type APIConfig struct {
 // path for SSO/MFA in homelab deployments.
 type AuthConfig struct {
 	Type string `yaml:"type"`
+
+	// AllowAnonymous permits api.auth.type=none on a NON-loopback
+	// listener. Default false: Bulwark refuses to start an anonymous
+	// control surface on a public bind. Set true only when a trusted
+	// reverse proxy terminates authentication in front of Bulwark.
+	AllowAnonymous bool `yaml:"allow_anonymous"`
 
 	// Token is the shared secret for type=bearer.
 	Token string `yaml:"token"`

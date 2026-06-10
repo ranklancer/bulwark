@@ -32,25 +32,53 @@ type Client struct {
 	BaseURL    string // e.g. "http://docker" for socket transport, or the test server URL
 }
 
-// New returns a Client configured to talk to the local Docker socket.
-func New(socketPath string) *Client {
-	if socketPath == "" {
-		socketPath = DefaultSocketPath
+// New returns a Client configured to talk to Docker. The host may be:
+//
+//   - ""                 the local Unix socket at DefaultSocketPath
+//   - "/path/docker.sock" a Unix socket at that path
+//   - "unix:///path"      a Unix socket at that path
+//   - "tcp://host:port"   a TCP endpoint, e.g. a docker-socket-proxy
+//   - "http(s)://host"    an HTTP endpoint (also used by tests)
+//
+// TCP/HTTP endpoints let Bulwark reach the daemon through a
+// docker-socket-proxy instead of bind-mounting the raw /var/run/docker.sock,
+// so a compromised Bulwark cannot drive the Docker daemon directly.
+func New(host string) *Client {
+	if host == "" {
+		host = DefaultSocketPath
 	}
+	switch {
+	case strings.HasPrefix(host, "tcp://"):
+		return &Client{
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{IdleConnTimeout: 30 * time.Second},
+				Timeout:   30 * time.Second,
+			},
+			BaseURL: "http://" + strings.TrimPrefix(host, "tcp://"),
+		}
+	case strings.HasPrefix(host, "http://"), strings.HasPrefix(host, "https://"):
+		return &Client{
+			HTTPClient: &http.Client{
+				Transport: &http.Transport{IdleConnTimeout: 30 * time.Second},
+				Timeout:   30 * time.Second,
+			},
+			BaseURL: strings.TrimRight(host, "/"),
+		}
+	}
+	// Unix-socket transport (production default). The "unix://" scheme, if
+	// present, is stripped to the bare socket path.
+	socketPath := strings.TrimPrefix(host, "unix://")
 	t := &http.Transport{
 		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "unix", socketPath)
 		},
-		// The Docker socket only ever has one endpoint — pooling > 1 connection
-		// is wasteful, but we leave the defaults (room for future parallelism).
 		IdleConnTimeout: 30 * time.Second,
 	}
 	return &Client{
 		HTTPClient: &http.Client{Transport: t, Timeout: 30 * time.Second},
 		// The host portion is meaningless for Unix-socket transports; Docker
-		// ignores it. We keep "http://docker" rather than "http://unix" so
-		// it's obvious in logs that this is the Docker daemon and not a
-		// generic localhost service.
+		// ignores it. "http://docker" makes it obvious in logs this is the
+		// daemon and not a generic localhost service.
 		BaseURL: "http://docker",
 	}
 }

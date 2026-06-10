@@ -97,6 +97,9 @@ Flags:`)
 		}
 		loaded = c
 		cfg = loaded.ClassifierConfig()
+		if !flagPassed(fs, "docker-host") && loaded.Docker.Host != "" {
+			*dockerHost = loaded.Docker.Host
+		}
 	}
 
 	// --- Wire up dependencies ------------------------------------------------
