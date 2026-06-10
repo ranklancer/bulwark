@@ -13,6 +13,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
+	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
 // scanCycleConfig bundles the shared inputs for one full scan + dispatch +
@@ -102,18 +103,40 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 		// containers during a permitted window. Scans still run
 		// (read-only); notifications still fire so operators see
 		// pending work even outside the window.
+		applyResults := results
 		if len(cfg.MaintenanceWindows) > 0 && !scheduler.AnyActive(now(), cfg.MaintenanceWindows) {
-			res.ApplyGated = true
-			logger.Info("apply: outside maintenance window; skipping apply phase",
-				"now", now().Format(time.RFC3339),
-				"windows", len(cfg.MaintenanceWindows))
-		} else if cfg.DryRun {
+			// Outside the window we normally skip all mutation. Exception:
+			// with AutoApplyUrgentSafe, security-urgent SAFE updates (those
+			// closing CRITICAL CVEs) may apply on this tighter schedule —
+			// surfacing the security signal is the whole point. Everything
+			// else still waits for the window.
+			// auto_apply_urgent_safe is read from the scanner's loaded config
+			// (opt-in, off by default).
+			autoUrgent := cfg.Scanner != nil && cfg.Scanner.Config != nil && cfg.Scanner.Config.Security.AutoApplyUrgentSafe
+			urgent := filterUrgentSafe(results)
+			if autoUrgent && len(urgent) > 0 {
+				logger.Info("apply: outside maintenance window; applying security-urgent SAFE updates only (auto_apply_urgent_safe)",
+					"now", now().Format(time.RFC3339),
+					"urgent_safe", len(urgent))
+				applyResults = urgent
+			} else {
+				res.ApplyGated = true
+				logger.Info("apply: outside maintenance window; skipping apply phase",
+					"now", now().Format(time.RFC3339),
+					"windows", len(cfg.MaintenanceWindows))
+				applyResults = nil
+			}
+		}
+		switch {
+		case applyResults == nil:
+			// gated — nothing to apply this cycle
+		case cfg.DryRun:
 			// Dry-run: log what would be applied; produce synthetic
 			// success outcomes so the notification path renders the
 			// "Auto-updated" framing operators expect to inspect.
-			res.Applies = applyEligibleDryRun(results, cfg.Store, logger)
-		} else {
-			res.Applies = applyEligibleUpdates(ctx, results, cfg.Updater, cfg.Store, cfg.Events, logger, cfg.SnapshotOverrides)
+			res.Applies = applyEligibleDryRun(applyResults, cfg.Store, logger)
+		default:
+			res.Applies = applyEligibleUpdates(ctx, applyResults, cfg.Updater, cfg.Store, cfg.Events, logger, cfg.SnapshotOverrides)
 		}
 	}
 
@@ -208,4 +231,21 @@ func scanCompletionDetail(res scanCycleResult) string {
 		return fmt.Sprintf("%d pending", pending)
 	}
 	return fmt.Sprintf("%d pending (%s)", pending, strings.Join(parts, ", "))
+}
+
+// filterUrgentSafe returns the subset of results that are SAFE-classified and
+// carry a CRITICAL-closing security urgency. These are the only updates that
+// may bypass the maintenance window when auto_apply_urgent_safe is enabled.
+func filterUrgentSafe(results []scanner.Result) []scanner.Result {
+	var out []scanner.Result
+	for _, r := range results {
+		a := r.Assessment
+		if a == nil || a.Level != types.RiskSafe || a.Security == nil {
+			continue
+		}
+		if a.Security.Urgency == types.UrgencyUrgent {
+			out = append(out, r)
+		}
+	}
+	return out
 }

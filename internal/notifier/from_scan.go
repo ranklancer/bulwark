@@ -38,6 +38,7 @@ func EventsFromScan(results []scanner.Result, ts time.Time) []Event {
 			LocalDigest:    r.LocalDigest,
 			RegistryDigest: r.RegistryDigest,
 			Timestamp:      ts,
+			Security:       r.Assessment.Security,
 		})
 	}
 	return out

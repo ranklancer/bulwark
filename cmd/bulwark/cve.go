@@ -25,6 +25,11 @@ func buildCVESource(cfg *config.Config) (cve.Source, cve.Severity) {
 			return cve.TrivyDirSource{Dir: dir}, threshold
 		}
 		return nil, threshold
+	case "grype":
+		if dir := cfg.Security.CVESource.Grype.ReportDir; dir != "" {
+			return cve.GrypeDirSource{Dir: dir}, threshold
+		}
+		return nil, threshold
 	default:
 		return nil, threshold
 	}

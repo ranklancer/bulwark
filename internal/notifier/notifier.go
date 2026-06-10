@@ -48,6 +48,10 @@ type Event struct {
 	// Implementations should make it visually distinct so the recipient
 	// knows it isn't a real alert.
 	Synthetic bool
+
+	// Security, when non-nil, is the security-urgency verdict for this
+	// update (which CVEs it closes + how urgent). Surfaced in alerts.
+	Security *types.SecurityAssessment
 }
 
 // Notifier is the contract every channel implementation satisfies. The
@@ -199,8 +203,20 @@ func titleFor(e Event) string {
 	case types.ActionStackSkipped:
 		prefix = "Stack-skipped"
 	}
+	if e.Security != nil && e.Security.Urgency == types.UrgencyUrgent {
+		prefix = "[SECURITY] " + prefix
+	}
 	if e.Synthetic {
 		prefix = "[test] " + prefix
 	}
 	return fmt.Sprintf("%s: %s", prefix, e.Container)
+}
+
+// SecurityLine returns a one-line security-urgency summary for rendering,
+// or "" when there is no security signal on this event.
+func (e Event) SecurityLine() string {
+	if e.Security == nil {
+		return ""
+	}
+	return e.Security.Summary()
 }
