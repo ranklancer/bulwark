@@ -64,9 +64,17 @@ Flags:`)
 	dataDir := fs.String("data-dir", os.Getenv("BULWARK_DATA_DIR"), "directory for persistent state")
 	dockerHost := fs.String("docker-host", "", "Docker socket path (default /var/run/docker.sock); empty disables Docker integration")
 	noDocker := fs.Bool("no-docker", false, "do not connect to Docker (cross-host DIUN deployments)")
-	diunToken := fs.String("diun-token", os.Getenv("BULWARK_DIUN_TOKEN"), "shared secret required on DIUN webhook requests")
+	diunTokenDefault, err := config.SecretEnv("BULWARK_DIUN_TOKEN")
+	if err != nil {
+		return err
+	}
+	diunToken := fs.String("diun-token", diunTokenDefault, "shared secret required on DIUN webhook requests")
 	dedupTTL := fs.Duration("dedup-ttl", 24*time.Hour, "minimum interval between repeat notifications for the same (container, digest)")
-	githubToken := fs.String("github-token", os.Getenv("BULWARK_GITHUB_TOKEN"), "GitHub PAT for higher rate limits when fetching release notes")
+	githubTokenDefault, err := config.SecretEnv("BULWARK_GITHUB_TOKEN")
+	if err != nil {
+		return err
+	}
+	githubToken := fs.String("github-token", githubTokenDefault, "GitHub PAT for higher rate limits when fetching release notes")
 	verbose := fs.Bool("v", false, "verbose progress logging on stderr")
 	if err := fs.Parse(args); err != nil {
 		return errUsage

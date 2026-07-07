@@ -1,6 +1,13 @@
 # Bulwark configuration — every field has a sensible default. Start with this
 # example and remove blocks you don't need. All examples below use RFC-reserved
 # IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) and example.com domains.
+#
+# Secrets: any ${VAR} token below is replaced at load time with environment
+# variable VAR. Every such secret also supports the Docker-secrets _FILE
+# convention — set VAR_FILE to a file path (e.g. a mounted docker secret) and
+# the value is read from that file. Provide exactly one of VAR or VAR_FILE;
+# setting both is rejected, and a missing/unreadable/empty VAR_FILE fails
+# closed. See docs/secrets.md.
 
 # How Bulwark connects to Docker. The recommended (and example-compose)
 # deployment talks to a docker-socket-proxy over TCP rather than bind-mounting
@@ -287,6 +294,7 @@ api:
   diun:
     # Optional shared secret. When set, DIUN must include it on each call
     # via Authorization: Bearer <token> or X-Bulwark-Token. Empty = anonymous.
+    # Deliver from a mounted secret with BULWARK_DIUN_TOKEN_FILE (docs/secrets.md).
     token: "${BULWARK_DIUN_TOKEN}"
     # Optional HMAC secret. When set, requests must additionally carry
     # X-Bulwark-Timestamp + X-Bulwark-Signature headers; older-than-5min

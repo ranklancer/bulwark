@@ -308,7 +308,11 @@ Flags:`)
 	}
 	configPath := fs.String("config", "", "path to bulwark.yaml (optional)")
 	skipNotes := fs.Bool("no-fetch-notes", false, "skip GitHub release-notes fetch")
-	githubToken := fs.String("github-token", os.Getenv("BULWARK_GITHUB_TOKEN"), "GitHub PAT for higher rate limits")
+	githubTokenDefault, err := config.SecretEnv("BULWARK_GITHUB_TOKEN")
+	if err != nil {
+		return err
+	}
+	githubToken := fs.String("github-token", githubTokenDefault, "GitHub PAT for higher rate limits")
 	verbose := fs.Bool("v", false, "verbose progress logging on stderr")
 	if err := fs.Parse(args); err != nil {
 		return errUsage

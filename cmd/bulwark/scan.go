@@ -67,7 +67,11 @@ Flags:`)
 	all := fs.Bool("all", false, "include stopped containers")
 	jsonOut := fs.Bool("json", false, "emit JSON instead of human-readable text")
 	skipNotes := fs.Bool("no-fetch-notes", false, "skip GitHub release-notes fetch")
-	githubToken := fs.String("github-token", os.Getenv("BULWARK_GITHUB_TOKEN"), "GitHub PAT for higher rate limits")
+	githubTokenDefault, err := config.SecretEnv("BULWARK_GITHUB_TOKEN")
+	if err != nil {
+		return err
+	}
+	githubToken := fs.String("github-token", githubTokenDefault, "GitHub PAT for higher rate limits")
 	concurrency := fs.Int("concurrency", 4, "number of containers to inspect in parallel")
 	noColor := fs.Bool("no-color", false, "disable ANSI colour codes in text output")
 	notify := fs.Bool("notify", false, "after scanning, dispatch notifications to channels enabled in config")
@@ -366,6 +370,7 @@ func filterByApproval(st *store.Store, events []notifier.Event, logger *slog.Log
 	}
 	return kept, decided
 }
+
 // We deliberately treat "all channels failed" as "not delivered" — better to
 // re-notify next scan than to silently swallow a failed alert.
 func markSentEvents(st *store.Store, events []notifier.Event, results []notifier.DispatchResult, when time.Time, logger *slog.Logger) {
@@ -464,28 +469,27 @@ func buildScanRecord(results []scanner.Result, dispatch []notifier.DispatchResul
 	return rec
 }
 
-
 // jsonResult is the wire shape of a scan result; mirrors scanner.Result but
 // uses string-typed fields for type-safe JSON consumers.
 type jsonResult struct {
-	Container       string `json:"container"`
-	Image           string `json:"image"`
-	ComposeProject  string `json:"compose_project,omitempty"`
-	Skipped         bool   `json:"skipped"`
-	SkipReason      string `json:"skip_reason,omitempty"`
-	UpdateAvailable bool   `json:"update_available"`
-	LocalDigest     string `json:"local_digest,omitempty"`
-	RegistryDigest  string `json:"registry_digest,omitempty"`
-	Level           string `json:"level,omitempty"`
-	Confidence      string `json:"confidence,omitempty"`
-	Kind            string `json:"kind,omitempty"`
-	Rationale       string `json:"rationale,omitempty"`
-	From            string `json:"from,omitempty"`
-	To              string `json:"to,omitempty"`
-	NotesSource     string `json:"notes_source,omitempty"`
-	ReleaseURL      string `json:"release_url,omitempty"`
+	Container       string   `json:"container"`
+	Image           string   `json:"image"`
+	ComposeProject  string   `json:"compose_project,omitempty"`
+	Skipped         bool     `json:"skipped"`
+	SkipReason      string   `json:"skip_reason,omitempty"`
+	UpdateAvailable bool     `json:"update_available"`
+	LocalDigest     string   `json:"local_digest,omitempty"`
+	RegistryDigest  string   `json:"registry_digest,omitempty"`
+	Level           string   `json:"level,omitempty"`
+	Confidence      string   `json:"confidence,omitempty"`
+	Kind            string   `json:"kind,omitempty"`
+	Rationale       string   `json:"rationale,omitempty"`
+	From            string   `json:"from,omitempty"`
+	To              string   `json:"to,omitempty"`
+	NotesSource     string   `json:"notes_source,omitempty"`
+	ReleaseURL      string   `json:"release_url,omitempty"`
 	MatchedTokens   []string `json:"matched_tokens,omitempty"`
-	Error           string `json:"error,omitempty"`
+	Error           string   `json:"error,omitempty"`
 }
 
 func writeScanJSON(w io.Writer, results []scanner.Result, dispatch []notifier.DispatchResult) error {
