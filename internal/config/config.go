@@ -386,7 +386,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", abs, err)
 	}
-	expanded := expandEnv(string(raw))
+	expanded, err := expandEnv(string(raw))
+	if err != nil {
+		return nil, err
+	}
 
 	cfg := Defaults()
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
@@ -437,14 +440,29 @@ func Defaults() *Config {
 // containing literal dollar signs are not silently rewritten.
 var envVarRE = regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
 
-func expandEnv(s string) string {
-	return envVarRE.ReplaceAllStringFunc(s, func(m string) string {
+// expandEnv replaces every `${VAR}` token in s with a resolved secret value.
+// Resolution follows the Docker-secrets `_FILE` convention (see
+// resolveSecretEnv): an explicit VAR wins, otherwise VAR_FILE is read from
+// disk. An unset variable with no _FILE indirection is left as the literal
+// `${VAR}` token, preserving prior behaviour. A set-but-unreadable or empty
+// _FILE fails closed with a non-nil error.
+func expandEnv(s string) (string, error) {
+	var firstErr error
+	out := envVarRE.ReplaceAllStringFunc(s, func(m string) string {
 		name := m[2 : len(m)-1]
-		if v, ok := os.LookupEnv(name); ok {
+		v, found, err := resolveSecretEnv(name)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			return m
+		}
+		if found {
 			return v
 		}
 		return m
 	})
+	return out, firstErr
 }
 
 // Validate checks for inconsistent or unsupported settings. It is called by

@@ -93,9 +93,17 @@ Flags:`)
 	healthTimeout := fs.Duration("health-timeout", 60*time.Second, "how long to wait for the recreated container to become healthy before rolling back")
 	all := fs.Bool("all", false, "include stopped containers in scans")
 	skipNotes := fs.Bool("no-fetch-notes", false, "skip GitHub release-notes fetch during scans")
-	githubToken := fs.String("github-token", os.Getenv("BULWARK_GITHUB_TOKEN"), "GitHub PAT for higher rate limits")
+	githubTokenDefault, err := config.SecretEnv("BULWARK_GITHUB_TOKEN")
+	if err != nil {
+		return err
+	}
+	githubToken := fs.String("github-token", githubTokenDefault, "GitHub PAT for higher rate limits")
 	concurrency := fs.Int("concurrency", 4, "number of containers to inspect in parallel")
-	diunToken := fs.String("diun-token", os.Getenv("BULWARK_DIUN_TOKEN"), "shared secret required on DIUN webhook requests")
+	diunTokenDefault, err := config.SecretEnv("BULWARK_DIUN_TOKEN")
+	if err != nil {
+		return err
+	}
+	diunToken := fs.String("diun-token", diunTokenDefault, "shared secret required on DIUN webhook requests")
 	dedupTTL := fs.Duration("dedup-ttl", 24*time.Hour, "minimum interval between repeat notifications for the same (container, digest)")
 	verbose := fs.Bool("v", false, "verbose progress logging on stderr")
 	if err := fs.Parse(args); err != nil {
