@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/api"
 	"github.com/bulwark-docker/bulwark/internal/configstore"
@@ -11,6 +12,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
+	"github.com/bulwark-docker/bulwark/internal/verify"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
@@ -21,6 +23,8 @@ type applyOutcome struct {
 	RolledBack   bool
 	StackSkipped bool   // eligible, but a peer in the same compose project failed first
 	StackPeer    string // when StackSkipped, the peer container whose failure triggered the skip
+	Blocked      bool   // held by the deploy-time trust gate (verdict=block)
+	BreakGlass   bool   // trust gate failed but an audited break-glass override applied
 	Err          error
 	NewImage     string
 	OldImage     string
@@ -45,7 +49,7 @@ type snapshotOverrideLookup func(name string) configstore.ContainerOverride
 //
 // Returns a map keyed by container name. Containers without an outcome key
 // were not considered eligible.
-func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *updater.Updater, st *store.Store, bus *api.EventBus, logger *slog.Logger, overrides snapshotOverrideLookup) map[string]applyOutcome {
+func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *updater.Updater, st *store.Store, bus *api.EventBus, logger *slog.Logger, gate *verify.Gate, metrics *api.Metrics, overrides snapshotOverrideLookup) map[string]applyOutcome {
 	if u == nil {
 		return nil
 	}
@@ -101,6 +105,32 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 					Detail:    detail,
 				})
 				continue
+			}
+		}
+		// --- deploy-time trust gate (P0): the trust engine that lets safe
+		// automation flow. A passing verdict lets this already-eligible update
+		// apply with confidence; only a failing block-mode verdict holds it.
+		// A nil or disabled gate is a no-op (zero behavior change).
+		if gate != nil && gate.Policy.Enabled {
+			verdict := gate.Evaluate(ctx, verify.Input{PinnedRef: pinnedRef(r), Labels: r.Container.Labels})
+			metrics.IncVerdict(string(verdict.Decision))
+			switch verdict.Decision {
+			case verify.DecisionBlock:
+				detail := verdict.Summary()
+				logger.Warn("apply: blocked by trust gate", "container", r.Container.Name, "image", r.Container.Image, "reason", detail)
+				st.Audit(store.AuditEvent{Action: store.ActionApplyBlocked, Container: r.Container.Name, Image: r.Container.Image, Level: r.Assessment.Level, Digest: r.RegistryDigest, Detail: detail})
+				bus.Publish(api.Event{Type: api.EventApplyBlocked, Container: r.Container.Name, Image: r.Container.Image, Detail: detail})
+				out[r.Container.Name] = applyOutcome{Blocked: true, OldImage: r.Container.Image, NewImage: r.Reference.String()}
+				continue
+			case verify.DecisionBreakGlass:
+				reason := ""
+				if verdict.BreakGlass != nil {
+					reason = verdict.BreakGlass.Reason
+				}
+				detail := "break-glass: " + reason + " - " + verdict.Summary()
+				logger.Warn("apply: trust gate overridden by break-glass", "container", r.Container.Name, "image", r.Container.Image, "reason", reason)
+				st.Audit(store.AuditEvent{Action: store.ActionApplyBreakGlass, Container: r.Container.Name, Image: r.Container.Image, Level: r.Assessment.Level, Digest: r.RegistryDigest, Detail: detail})
+				bus.Publish(api.Event{Type: api.EventApplyBreakGlass, Container: r.Container.Name, Image: r.Container.Image, Detail: detail})
 			}
 		}
 		opts := updater.ApplyOptions{}
@@ -264,6 +294,8 @@ func adjustEventActions(events []notifier.Event, applyMap map[string]applyOutcom
 			continue
 		}
 		switch {
+		case oc.Blocked:
+			events[i].Action = types.ActionBlocked
 		case oc.StackSkipped:
 			events[i].Action = types.ActionStackSkipped
 		case oc.RolledBack:
@@ -272,4 +304,16 @@ func adjustEventActions(events []notifier.Event, applyMap map[string]applyOutcom
 			events[i].Action = types.ActionAutoUpdated
 		}
 	}
+}
+
+// pinnedRef returns the digest-pinned reference the daemon will deploy, so the
+// trust gate verifies exactly the artifact being applied. When a registry
+// digest is known it is appended (repo:tag@sha256:...); cosign resolves by
+// digest regardless of the tag.
+func pinnedRef(r scanner.Result) string {
+	ref := r.Reference.String()
+	if r.RegistryDigest != "" && !strings.Contains(ref, "@") {
+		return ref + "@" + r.RegistryDigest
+	}
+	return ref
 }

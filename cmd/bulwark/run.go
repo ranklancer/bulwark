@@ -22,11 +22,12 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/notifier"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
-	"github.com/bulwark-docker/bulwark/internal/snapshot/detect"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
+	"github.com/bulwark-docker/bulwark/internal/snapshot/detect"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
+	"github.com/bulwark-docker/bulwark/internal/verify"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
@@ -288,6 +289,22 @@ Flags:`)
 	// once; nil + no-op when disabled.
 	cveSource, cveThreshold := buildCVESource(loaded)
 
+	// Shared metrics instance so scan/apply/verdict counters and the HTTP
+	// /metrics endpoint observe the same counters.
+	metrics := api.NewMetrics()
+
+	// Deploy-time trust gate (opt-in via the verify block). Built once; a
+	// disabled policy makes Evaluate a no-op allow, so this is nil-cost when
+	// verify.enabled is false. cosign is invoked as an external binary.
+	var verifyGate *verify.Gate
+	if loaded != nil && loaded.Verify.Enabled {
+		verifyGate = &verify.Gate{
+			Policy:    loaded.VerifyPolicy(),
+			Signature: &verify.CosignVerifier{},
+			Vulns:     cveSource,
+		}
+	}
+
 	scanJob := func(ctx context.Context) error {
 		if dockerClient == nil {
 			return nil
@@ -348,6 +365,8 @@ Flags:`)
 			DigestBuffer:       digestBuf,
 			Events:             eventBus,
 			SnapshotOverrides:  overrides,
+			Gate:               verifyGate,
+			Metrics:            metrics,
 			Now:                deps.Now,
 			Logger:             logger,
 			All:                *all,
@@ -446,7 +465,7 @@ Flags:`)
 		Logger:           logger,
 		Auth:             wrappedAuth,
 		Sessions:         sessions,
-		SessionInnerAuth: auth, // bare; cookie can't renew itself
+		SessionInnerAuth: auth,    // bare; cookie can't renew itself
 		TriggerScan:      scanJob, // POST /api/v1/scans queue-jumps the next periodic firing
 		Dispatcher:       dispatcher,
 		Registry:         notifierRegistry,
@@ -479,7 +498,7 @@ Flags:`)
 			logger.Info("run: scheduler cron hot-reloaded", "expr", expr)
 		},
 	}
-	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), api.NewMetrics(), logger)
+	srv := api.NewServer(*listen, diun, state, api.DefaultRateLimiter(), metrics, logger)
 
 	// --- Set up parent context (signals or injected) --------------------
 	var ctx context.Context
