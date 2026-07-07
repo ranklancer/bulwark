@@ -5,8 +5,9 @@
 # Secrets: any ${VAR} token below is replaced at load time with environment
 # variable VAR. Every such secret also supports the Docker-secrets _FILE
 # convention — set VAR_FILE to a file path (e.g. a mounted docker secret) and
-# the value is read from that file. Precedence: an explicit VAR wins, else
-# VAR_FILE is read (fail-closed if missing/unreadable). See docs/secrets.md.
+# the value is read from that file. Provide exactly one of VAR or VAR_FILE;
+# setting both is rejected, and a missing/unreadable/empty VAR_FILE fails
+# closed. See docs/secrets.md.
 
 # How Bulwark connects to Docker. The recommended (and example-compose)
 # deployment talks to a docker-socket-proxy over TCP rather than bind-mounting

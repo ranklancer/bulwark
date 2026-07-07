@@ -16,30 +16,47 @@ import (
 const secretFileEnvSuffix = "_FILE"
 
 // resolveSecretEnv resolves a secret-bearing environment variable, honouring
-// the `_FILE` indirection convention. Precedence, highest first:
+// the `_FILE` indirection convention. Exactly one source may be provided:
 //
-//  1. Explicit value: a non-empty NAME wins outright.
-//  2. File indirection: otherwise, if NAME_FILE is set, the secret is read
-//     from that file path (a trailing newline is stripped).
-//  3. Absent: neither set -> ("", false, nil); the caller applies its default.
+//  1. Inline value: a non-empty NAME.
+//  2. File indirection: NAME_FILE, a path whose file contents are the secret
+//     (a trailing newline is stripped).
 //
+// If NEITHER is set the variable is absent -> ("", false, nil) and the caller
+// applies its default (a `${VAR}` token with no value is left as the literal).
 // A bare NAME that is present but empty, with no NAME_FILE, is returned as an
 // explicit empty value (found == true) so prior `${VAR}` expansion semantics
 // are preserved exactly.
 //
-// It FAILS CLOSED: when NAME_FILE is set but the file is missing, unreadable,
-// or empty after trimming, a non-nil error is returned instead of a silent
-// empty secret. The secret's value is NEVER included in the error — only the
-// variable name and, for I/O failures, the offending path (a path is not the
-// secret) — so resolution errors are safe to log.
+// It FAILS CLOSED in three cases, matching the official docker-entrypoint
+// behaviour of refusing to guess:
+//
+//   - BOTH a non-empty NAME and a NAME_FILE are set (ambiguous — the operator
+//     must provide exactly one).
+//   - NAME_FILE is set but the file is missing or unreadable.
+//   - NAME_FILE is set but the file is empty after trimming (a silent empty
+//     secret is a misconfiguration, not a valid value).
+//
+// The secret's value is NEVER included in the error — only the variable names
+// and, for I/O failures, the offending path (a path is not the secret) — so
+// resolution errors are safe to log.
 func resolveSecretEnv(name string) (value string, found bool, err error) {
 	v, present := os.LookupEnv(name)
-	if present && v != "" {
+	fileVar := name + secretFileEnvSuffix
+	path, fileSet := os.LookupEnv(fileVar)
+
+	hasInline := present && v != ""
+	hasFile := fileSet && path != ""
+
+	if hasInline && hasFile {
+		return "", false, fmt.Errorf("config: both %s and %s are set; provide exactly one (refusing to guess which to use)", name, fileVar)
+	}
+
+	if hasInline {
 		return v, true, nil
 	}
 
-	fileVar := name + secretFileEnvSuffix
-	if path, ok := os.LookupEnv(fileVar); ok && path != "" {
+	if hasFile {
 		raw, readErr := os.ReadFile(path)
 		if readErr != nil {
 			return "", false, fmt.Errorf("config: read secret for %s from %s: %w", name, fileVar, readErr)
@@ -61,9 +78,10 @@ func resolveSecretEnv(name string) (value string, found bool, err error) {
 
 // SecretEnv resolves a secret-bearing environment variable with `_FILE`
 // support and returns the resolved value, or "" when neither NAME nor
-// NAME_FILE is set. It fails closed on a set-but-unreadable or empty
-// NAME_FILE. Use it wherever a secret was previously read with a bare
-// os.Getenv so the same value can be delivered as a mounted Docker secret.
+// NAME_FILE is set. It fails closed when both NAME and NAME_FILE are set, and
+// on a set-but-unreadable or empty NAME_FILE. Use it wherever a secret was
+// previously read with a bare os.Getenv so the same value can be delivered as
+// a mounted Docker secret.
 func SecretEnv(name string) (string, error) {
 	v, _, err := resolveSecretEnv(name)
 	return v, err

@@ -58,25 +58,27 @@ per-variable special case:
   `BULWARK_GITHUB_TOKEN` via the same resolver, so `BULWARK_DIUN_TOKEN_FILE`
   and `BULWARK_GITHUB_TOKEN_FILE` work identically.
 
-### 3.1 Precedence
+### 3.1 Exactly one source
 
-For a given `NAME`, resolution is, highest priority first:
+For a given `NAME`, provide **exactly one** of an inline value or a file:
 
-1. An explicit, non-empty value in `NAME` wins outright.
-2. Otherwise, if `NAME_FILE` is set, the secret is read from that file. A
-   single trailing newline is stripped so `printf 'token' > file` and
-   `echo token > file` behave identically.
-3. Otherwise the variable is absent and the caller's own default applies (for
-   a `${VAR}` token with no value, the literal `${VAR}` is left untouched,
-   preserving prior behaviour).
+1. Inline: a non-empty `NAME`.
+2. File: `NAME_FILE`, a path whose contents are the secret. A single trailing
+   newline is stripped, so `printf 'token' > file` and `echo token > file`
+   behave identically.
 
-If both `NAME` and `NAME_FILE` are set, the inline value wins; there is no hard
-error, keeping precedence simple and predictable.
+If neither is set the variable is absent and the caller's default applies (for
+a `${VAR}` token with no value, the literal `${VAR}` is left untouched,
+preserving prior behaviour).
+
+Setting **both** `NAME` and `NAME_FILE` is rejected as ambiguous (fail-closed),
+matching the official docker-entrypoint convention, which refuses to guess
+which source to trust rather than silently picking one.
 
 ### 3.2 Fail-closed semantics
 
-If `NAME_FILE` is set but the file is missing, unreadable, or empty after
-trimming, Bulwark fails closed: configuration loading (or command start-up)
+If both `NAME` and `NAME_FILE` are set, or if `NAME_FILE` is set but the file
+is missing, unreadable, or empty after trimming, Bulwark fails closed: configuration loading (or command start-up)
 returns a clear error naming the variable and the offending path, and the
 process does not start with a silently empty secret. The secret's *value* is
 never written to logs or included in any error message — only the variable

@@ -442,10 +442,10 @@ var envVarRE = regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*)\}`)
 
 // expandEnv replaces every `${VAR}` token in s with a resolved secret value.
 // Resolution follows the Docker-secrets `_FILE` convention (see
-// resolveSecretEnv): an explicit VAR wins, otherwise VAR_FILE is read from
-// disk. An unset variable with no _FILE indirection is left as the literal
-// `${VAR}` token, preserving prior behaviour. A set-but-unreadable or empty
-// _FILE fails closed with a non-nil error.
+// resolveSecretEnv): provide exactly one of VAR or VAR_FILE — setting both is
+// rejected as ambiguous. An unset variable with no _FILE indirection is left
+// as the literal `${VAR}` token, preserving prior behaviour. A both-set,
+// unreadable, or empty _FILE fails closed with a non-nil error.
 func expandEnv(s string) (string, error) {
 	var firstErr error
 	out := envVarRE.ReplaceAllStringFunc(s, func(m string) string {

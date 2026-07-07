@@ -34,17 +34,37 @@ func TestResolveSecretEnv_ValueFromFile_TrailingNewlineTrimmed(t *testing.T) {
 	}
 }
 
-func TestResolveSecretEnv_ExplicitEnvWinsOverFile(t *testing.T) {
-	const name = "BULWARK_SECRETTEST_PRECEDENCE"
-	t.Setenv(name, "env-wins")
-	t.Setenv(name+"_FILE", writeSecretFile(t, "file-loses"))
+func TestResolveSecretEnv_InlineOnlyWins(t *testing.T) {
+	const name = "BULWARK_SECRETTEST_INLINE"
+	t.Setenv(name, "inline-value") // no _FILE
 
 	v, found, err := resolveSecretEnv(name)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !found || v != "env-wins" {
-		t.Errorf("value = %q found=%v, want %q true (explicit env must win)", v, found, "env-wins")
+	if !found || v != "inline-value" {
+		t.Errorf("value = %q found=%v, want %q true", v, found, "inline-value")
+	}
+}
+
+func TestResolveSecretEnv_BothSetFailsClosed(t *testing.T) {
+	const name = "BULWARK_SECRETTEST_BOTH"
+	t.Setenv(name, "inline-value")
+	t.Setenv(name+"_FILE", writeSecretFile(t, "file-value"))
+
+	v, found, err := resolveSecretEnv(name)
+	if err == nil {
+		t.Fatal("expected fail-closed error when both NAME and NAME_FILE are set, got nil")
+	}
+	if found || v != "" {
+		t.Errorf("on ambiguity want (\"\", false), got (%q, %v)", v, found)
+	}
+	// The error must name both variables and never a value.
+	if !strings.Contains(err.Error(), name) || !strings.Contains(err.Error(), name+"_FILE") {
+		t.Errorf("error should name both %s and %s_FILE: %v", name, name, err)
+	}
+	if strings.Contains(err.Error(), "inline-value") || strings.Contains(err.Error(), "file-value") {
+		t.Errorf("error must not leak a secret value: %v", err)
 	}
 }
 
@@ -59,7 +79,6 @@ func TestResolveSecretEnv_MissingFileFailsClosed(t *testing.T) {
 	if found || v != "" {
 		t.Errorf("on failure want (\"\", false), got (%q, %v)", v, found)
 	}
-	// The error must name the variable for debuggability, never a value.
 	if !strings.Contains(err.Error(), name) {
 		t.Errorf("error should mention %q: %v", name, err)
 	}
@@ -124,6 +143,16 @@ func TestSecretEnv_ReadsFileAndFailsClosed(t *testing.T) {
 	}
 }
 
+func TestSecretEnv_BothSetFailsClosed(t *testing.T) {
+	const name = "BULWARK_SECRETTEST_HELPER_BOTH"
+	t.Setenv(name, "inline-value")
+	t.Setenv(name+"_FILE", writeSecretFile(t, "file-value"))
+
+	if _, err := SecretEnv(name); err == nil {
+		t.Fatal("SecretEnv should fail closed when both NAME and NAME_FILE are set")
+	}
+}
+
 func TestLoad_FileSecretSubstitution(t *testing.T) {
 	t.Setenv("BULWARK_FILETEST_TOKEN_FILE", writeSecretFile(t, "ha-token-from-file\n"))
 	dir := t.TempDir()
@@ -161,5 +190,23 @@ notifications:
 	}
 	if _, err := Load(path); err == nil {
 		t.Fatal("Load should fail closed when a referenced _FILE is unreadable")
+	}
+}
+
+func TestLoad_FileSecretBothSet_FailsClosed(t *testing.T) {
+	t.Setenv("BULWARK_FILETEST_TOKEN", "inline-value")
+	t.Setenv("BULWARK_FILETEST_TOKEN_FILE", writeSecretFile(t, "file-value"))
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bulwark.yaml")
+	contents := `
+notifications:
+  homeassistant:
+    token: ${BULWARK_FILETEST_TOKEN}
+`
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatalf("write tmp config: %v", err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("Load should fail closed when a ${VAR} has both inline and _FILE set")
 	}
 }
