@@ -302,6 +302,45 @@ containing literal dollar signs are never silently rewritten. Command-based
 secrets (`--diun-token`, `--github-token`) also read from environment
 variables (`BULWARK_DIUN_TOKEN`, `BULWARK_GITHUB_TOKEN`).
 
+#### Secrets from files (`_FILE`)
+
+Any secret-bearing variable `NAME` also accepts a companion `NAME_FILE` whose
+value is a path to a file holding the secret — the Docker-secrets convention
+used by the official `postgres`, `mysql`, and `wordpress` images and by
+Grafana, Vaultwarden, and GitLab. Bulwark resolves it natively in the config
+loader (no entrypoint wrapper needed), so it works both for every `${VAR}`
+token in `bulwark.yaml` and for the direct-environment secrets
+`BULWARK_DIUN_TOKEN` and `BULWARK_GITHUB_TOKEN`:
+
+```yaml
+services:
+  bulwark:
+    environment:
+      BULWARK_DIUN_TOKEN_FILE: /run/secrets/diun_token   # secret read from the file
+    secrets:
+      - diun_token
+secrets:
+  diun_token:
+    file: ./secrets/diun_token        # host-side, chmod 600
+```
+
+Resolution precedence is **inline value -> `_FILE` -> default**: a non-empty
+`NAME` is used first; otherwise `NAME_FILE` is read; otherwise the caller's
+default applies (an unset `${VAR}` with no `_FILE` is left as the literal
+`${VAR}`). A single trailing newline is stripped, so `printf 'tok' > file` and
+`echo tok > file` behave identically.
+
+Resolution fails **closed** and never guesses:
+
+- Setting **both** a non-empty `NAME` and its `NAME_FILE` is rejected as
+  ambiguous — provide exactly one.
+- A `NAME_FILE` that is missing, unreadable, or empty after trimming is an
+  error; the process refuses to start with a silently empty secret.
+
+Secret **values** are never written to logs or included in error messages; only
+the variable name and, for I/O failures, the file path appear. Full reference
+and migration notes: **[`docs/secrets.md`](docs/secrets.md)**.
+
 ### The `verify:` block
 
 ```yaml
@@ -463,6 +502,8 @@ and a per-IP token-bucket rate limiter wraps every route by default.
 | -------- | -------------- |
 | [`docs/verify-gate.md`](docs/verify-gate.md) | The deploy-time trust gate: axes, modes, break-glass, wiring. |
 | [`docs/the design notes-signature-verifier.md`](docs/the design notes-signature-verifier.md) | Why the signature axis pins a cosign binary rather than embedding a library. |
+| [`docs/secrets.md`](docs/secrets.md) | Secrets and the `_FILE` (Docker-secret) convention: precedence, fail-closed semantics, and migration from the entrypoint wrapper. |
+| [`docs/the design notes-progressive-enforcement-signature-gate.md`](docs/the design notes-progressive-enforcement-signature-gate.md) | Proposal: progressive-enforcement (safe-default) posture for the signature gate. |
 | [`docs/DEPLOY.md`](docs/DEPLOY.md) | Host-side deployment: Docker Compose, reverse proxy, TLS, DIUN integration. |
 | [`docs/UAT.md`](docs/UAT.md) | Step-by-step smoke-test playbook; each section is independent. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Contribution workflow, code style, and the PII policy. |
@@ -488,7 +529,9 @@ real hostname in your own untracked files.
 | 15–16  | HEALTHCHECK `start_period`, HTTP-only cookies; React + Tailwind SPA (SSE) | shipped |
 | 17     | Security-urgency axis: pluggable CVE source (Trivy, Grype)              | shipped |
 | 18     | Deploy-time verify-gate: cosign signature + vulnerability, break-glass  | shipped |
-| Future | `_FILE` (Docker-secret) config resolution; progressive enforcement; multi-host federation; Slack interactive approvals; signed audit log; LXC / Podman | planned |
+| 19     | Native `_FILE` (Docker-secret) config resolution — every `${VAR}` and direct-env secret | shipped |
+| 20     | Progressive-enforcement decision record for the signature gate ([the design notes](docs/the design notes-progressive-enforcement-signature-gate.md), proposal) | shipped |
+| Future | multi-host federation; Slack interactive approvals; signed audit log; LXC / Podman | planned |
 
 ---
 
