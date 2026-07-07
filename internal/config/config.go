@@ -31,11 +31,12 @@ type Config struct {
 	Hooks          HooksConfig          `yaml:"hooks"`
 	Notifications  NotificationsConfig  `yaml:"notifications"`
 	Overrides      Overrides            `yaml:"overrides"`
-	Exclude        Exclude               `yaml:"exclude"`
+	Exclude        Exclude              `yaml:"exclude"`
 	API            APIConfig            `yaml:"api"`
 	Registries     RegistriesConfig     `yaml:"registries"`
 	Logging        LoggingConfig        `yaml:"logging"`
 	Security       SecurityConfig       `yaml:"security"`
+	Verify         VerifyConfig         `yaml:"verify"`
 }
 
 // SecurityConfig is the opt-in CVE/security-urgency block. When Enabled is
@@ -74,9 +75,9 @@ type TrivySourceConfig struct {
 // explicit per-registry overrides applied BEFORE the docker-config
 // fallback so YAML always wins when both are present.
 type RegistriesConfig struct {
-	UseDockerConfig bool                              `yaml:"use_docker_config"`
-	DockerConfigPath string                           `yaml:"docker_config_path"`
-	Hosts           map[string]RegistryHostCredential `yaml:"hosts"`
+	UseDockerConfig  bool                              `yaml:"use_docker_config"`
+	DockerConfigPath string                            `yaml:"docker_config_path"`
+	Hosts            map[string]RegistryHostCredential `yaml:"hosts"`
 }
 
 // RegistryHostCredential is a single host's static credentials. Either
@@ -107,9 +108,9 @@ type DockerConfig struct {
 }
 
 type ScheduleConfig struct {
-	Check               string              `yaml:"check"`
-	ScanInterval        string              `yaml:"scan_interval"`
-	MaintenanceWindows  []MaintenanceWindow `yaml:"maintenance_windows"`
+	Check              string              `yaml:"check"`
+	ScanInterval       string              `yaml:"scan_interval"`
+	MaintenanceWindows []MaintenanceWindow `yaml:"maintenance_windows"`
 }
 
 type MaintenanceWindow struct {
@@ -119,13 +120,13 @@ type MaintenanceWindow struct {
 }
 
 type ClassificationConfig struct {
-	DefaultRisk        string         `yaml:"default_risk"`
-	BreakingKeywords   []string       `yaml:"breaking_keywords"`
-	MigrationKeywords  []string       `yaml:"migration_keywords"`
-	SecurityKeywords   []string       `yaml:"security_keywords"`
-	TrustedRebuilders  []string       `yaml:"trusted_rebuilders"`
-	Policies           PolicyConfig   `yaml:"policies"`
-	ChangelogMaxChars  int            `yaml:"changelog_max_chars"`
+	DefaultRisk       string       `yaml:"default_risk"`
+	BreakingKeywords  []string     `yaml:"breaking_keywords"`
+	MigrationKeywords []string     `yaml:"migration_keywords"`
+	SecurityKeywords  []string     `yaml:"security_keywords"`
+	TrustedRebuilders []string     `yaml:"trusted_rebuilders"`
+	Policies          PolicyConfig `yaml:"policies"`
+	ChangelogMaxChars int          `yaml:"changelog_max_chars"`
 }
 
 type PolicyConfig struct {
@@ -139,13 +140,13 @@ type PolicyConfig struct {
 }
 
 type SnapshotsConfig struct {
-	Backend   string `yaml:"backend"`
+	Backend string `yaml:"backend"`
 	// AllowApplyWithoutBackend permits `--apply` when Backend is
 	// "none". Default false: auto-applied SAFE updates would not be
 	// filesystem-recoverable without a snapshot backend, so Bulwark
 	// refuses --apply unless this is explicitly set.
 	AllowApplyWithoutBackend bool `yaml:"allow_apply_without_backend"`
-	ZFS       struct {
+	ZFS                      struct {
 		Datasets []string `yaml:"datasets"`
 	} `yaml:"zfs"`
 	Btrfs struct {
@@ -191,14 +192,14 @@ type HealthConfig struct {
 }
 
 type NotificationsConfig struct {
-	HomeAssistant HAConfig          `yaml:"homeassistant"`
-	Slack         SlackConfig       `yaml:"slack"`
-	Discord       DiscordConfig     `yaml:"discord"`
-	SMTP          SMTPConfig        `yaml:"smtp"`
-	Ntfy          NtfyConfig        `yaml:"ntfy"`
-	Shoutrrr      ShoutrrrConfig    `yaml:"shoutrrr"`
-	Generic       []GenericConfig   `yaml:"generic"`
-	Digest        DigestConfig      `yaml:"digest"`
+	HomeAssistant HAConfig        `yaml:"homeassistant"`
+	Slack         SlackConfig     `yaml:"slack"`
+	Discord       DiscordConfig   `yaml:"discord"`
+	SMTP          SMTPConfig      `yaml:"smtp"`
+	Ntfy          NtfyConfig      `yaml:"ntfy"`
+	Shoutrrr      ShoutrrrConfig  `yaml:"shoutrrr"`
+	Generic       []GenericConfig `yaml:"generic"`
+	Digest        DigestConfig    `yaml:"digest"`
 }
 
 // NtfyConfig configures the ntfy push-notification integration. ServerURL
@@ -227,13 +228,13 @@ type GenericConfig struct {
 }
 
 type HAConfig struct {
-	Enabled  bool                   `yaml:"enabled"`
-	URL      string                 `yaml:"url"`
-	Token    string                 `yaml:"token"`
-	Safe     HANotifyLevel          `yaml:"safe"`
-	Review   HANotifyLevel          `yaml:"review"`
-	Breaking HANotifyLevel          `yaml:"breaking"`
-	Rollback HANotifyLevel          `yaml:"rollback"`
+	Enabled  bool          `yaml:"enabled"`
+	URL      string        `yaml:"url"`
+	Token    string        `yaml:"token"`
+	Safe     HANotifyLevel `yaml:"safe"`
+	Review   HANotifyLevel `yaml:"review"`
+	Breaking HANotifyLevel `yaml:"breaking"`
+	Rollback HANotifyLevel `yaml:"rollback"`
 }
 
 type HANotifyLevel struct {
@@ -282,13 +283,13 @@ type Overrides struct {
 }
 
 type Override struct {
-	RiskOverride        string       `yaml:"risk_override"`
-	Schedule            string       `yaml:"schedule"`
-	PreUpdateHook       string       `yaml:"pre_update_hook"`
-	PostUpdateHook      string       `yaml:"post_update_hook"`
-	RollbackHook        string       `yaml:"rollback_hook"`
-	HealthTimeout       string       `yaml:"health_timeout"`
-	SnapshotDataset     string       `yaml:"snapshot_dataset"`
+	RiskOverride         string       `yaml:"risk_override"`
+	Schedule             string       `yaml:"schedule"`
+	PreUpdateHook        string       `yaml:"pre_update_hook"`
+	PostUpdateHook       string       `yaml:"post_update_hook"`
+	RollbackHook         string       `yaml:"rollback_hook"`
+	HealthTimeout        string       `yaml:"health_timeout"`
+	SnapshotDataset      string       `yaml:"snapshot_dataset"`
 	ClassificationPolicy PolicyConfig `yaml:"classification_policy"`
 }
 
@@ -299,8 +300,8 @@ type Exclude struct {
 }
 
 type APIConfig struct {
-	Enabled bool      `yaml:"enabled"`
-	Listen  string    `yaml:"listen"`
+	Enabled bool       `yaml:"enabled"`
+	Listen  string     `yaml:"listen"`
 	Auth    AuthConfig `yaml:"auth"`
 	// DIUN configures the DIUN-compatibility webhook receiver mounted at
 	// POST /api/v1/webhooks/diun. The endpoint is enabled whenever the
@@ -494,6 +495,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateSecurity(); err != nil {
+		return err
+	}
+	if err := c.validateVerify(); err != nil {
 		return err
 	}
 	return nil

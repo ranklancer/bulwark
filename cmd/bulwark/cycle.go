@@ -13,6 +13,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/scheduler"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/updater"
+	"github.com/bulwark-docker/bulwark/internal/verify"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
@@ -47,9 +48,14 @@ type scanCycleConfig struct {
 	// used by the apply pipeline. nil-safe; a daemon without a
 	// configstore falls back to label-driven precedence.
 	SnapshotOverrides snapshotOverrideLookup
-	Now    func() time.Time // injected for deterministic tests
-	Logger *slog.Logger
-	All    bool // include stopped containers
+	// Gate is the deploy-time trust gate. nil disables verification (zero
+	// behavior change); a passing verdict lets eligible updates apply.
+	Gate *verify.Gate
+	// Metrics receives verdict counters; nil-safe.
+	Metrics *api.Metrics
+	Now     func() time.Time // injected for deterministic tests
+	Logger  *slog.Logger
+	All     bool // include stopped containers
 }
 
 // scanCycleResult holds everything callers want to render afterwards. We
@@ -58,9 +64,9 @@ type scanCycleConfig struct {
 type scanCycleResult struct {
 	Results          []scanner.Result
 	Dispatch         []notifier.DispatchResult
-	DedupSilenced    int                    // events suppressed by TTL silencing
-	ApprovalSilenced int                    // events suppressed by an existing user decision
-	DigestQueued     int                    // events buffered for later digest flush
+	DedupSilenced    int                     // events suppressed by TTL silencing
+	ApprovalSilenced int                     // events suppressed by an existing user decision
+	DigestQueued     int                     // events buffered for later digest flush
 	Applies          map[string]applyOutcome // keyed by container name
 	// ApplyGated is true when --apply was set but the maintenance-window
 	// filter blocked the apply phase. Surfaced so callers can render a
@@ -136,7 +142,7 @@ func runScanCycle(ctx context.Context, cfg scanCycleConfig) (scanCycleResult, er
 			// "Auto-updated" framing operators expect to inspect.
 			res.Applies = applyEligibleDryRun(applyResults, cfg.Store, logger)
 		default:
-			res.Applies = applyEligibleUpdates(ctx, applyResults, cfg.Updater, cfg.Store, cfg.Events, logger, cfg.SnapshotOverrides)
+			res.Applies = applyEligibleUpdates(ctx, applyResults, cfg.Updater, cfg.Store, cfg.Events, logger, cfg.Gate, cfg.Metrics, cfg.SnapshotOverrides)
 		}
 	}
 

@@ -15,13 +15,14 @@ import (
 // metrics traces back to "we labelled by user-supplied string" — so we
 // label by enum-like values (action, level) and never by container name.
 type Metrics struct {
-	scansTotal       atomic.Int64
-	dispatchByCh     counterMap // labels: notifier
-	dispatchErrors   counterMap // labels: notifier
-	applyByOutcome   counterMap // labels: outcome ∈ {success,rolled_back,failed}
-	httpByStatus     counterMap // labels: route, code (Go status code class as 2xx/4xx/5xx)
-	decisionsByOutc  counterMap // labels: decision ∈ {approved,rejected,forgot,cleared}
-	rateLimited      atomic.Int64
+	scansTotal      atomic.Int64
+	dispatchByCh    counterMap // labels: notifier
+	dispatchErrors  counterMap // labels: notifier
+	applyByOutcome  counterMap // labels: outcome ∈ {success,rolled_back,failed}
+	httpByStatus    counterMap // labels: route, code (Go status code class as 2xx/4xx/5xx)
+	decisionsByOutc counterMap // labels: decision ∈ {approved,rejected,forgot,cleared}
+	verdictsByDec   counterMap // labels: decision ∈ {allow,warn,block,break_glass}
+	rateLimited     atomic.Int64
 }
 
 // NewMetrics returns a fresh Metrics value. Safe for concurrent use.
@@ -53,6 +54,15 @@ func (m *Metrics) IncApply(outcome string) {
 		return
 	}
 	m.applyByOutcome.add(outcome)
+}
+
+// IncVerdict records one deploy-time trust verdict by decision
+// (allow / warn / block / break_glass).
+func (m *Metrics) IncVerdict(decision string) {
+	if m == nil {
+		return
+	}
+	m.verdictsByDec.add(decision)
 }
 
 // IncDecision records one approval-queue mutation.
@@ -105,6 +115,9 @@ func (m *Metrics) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
 	emitMap(out, "bulwark_apply_total",
 		"Apply outcomes by result (success / rolled_back / failed).",
 		"counter", "outcome", &m.applyByOutcome)
+	emitMap(out, "bulwark_verify_verdicts_total",
+		"Deploy-time trust verdicts by decision (allow / warn / block / break_glass).",
+		"counter", "decision", &m.verdictsByDec)
 	emitMap(out, "bulwark_decisions_total",
 		"Approval-queue mutations by outcome.",
 		"counter", "outcome", &m.decisionsByOutc)
