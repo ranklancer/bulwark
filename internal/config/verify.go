@@ -8,6 +8,15 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/verify"
 )
 
+// Signature verifier backends selectable via verify.signature.verifier.
+const (
+	// sigVerifierCosign shells out to a pinned cosign binary. Default backend.
+	sigVerifierCosign = "cosign"
+	// sigVerifierSigstore is the planned sigstore-go bundle backend. It is
+	// experimental and rejected at startup until implemented (see the design notes).
+	sigVerifierSigstore = "sigstore-go"
+)
+
 // VerifyConfig is the opt-in deploy-time trust gate. When Enabled is false the
 // gate is inert and Bulwark's apply behaviour is unchanged. When true, an image
 // must clear the enabled axes before apply proceeds; the policy is fail-closed
@@ -21,9 +30,22 @@ type VerifyConfig struct {
 
 // VerifySignatureConfig configures cosign signature verification.
 type VerifySignatureConfig struct {
-	Mode       string                 `yaml:"mode"` // off | warn | block (default block when enabled)
+	Mode       string                 `yaml:"mode"`     // off | warn | block (default block when enabled)
+	Verifier   string                 `yaml:"verifier"` // cosign (default) | sigstore-go (experimental, not enabled)
 	Identities []VerifyIdentityConfig `yaml:"identities"`
-	Key        string                 `yaml:"key"` // path/ref to a public key for keyed verify
+	Key        string                 `yaml:"key"`    // path/ref to a public key for keyed verify
+	Cosign     VerifyCosignConfig     `yaml:"cosign"` // pinned cosign binary for the cosign backend
+}
+
+// VerifyCosignConfig pins the cosign binary the signature axis shells out to,
+// so the trust gate verifies against a known-good tool instead of whatever
+// cosign happens to be on PATH. Both version and digest are required when the
+// signature axis is active (fail-closed: the gate must not trust ambient tools).
+// A digest is public integrity metadata, not a secret; it is safe in config.
+type VerifyCosignConfig struct {
+	Binary  string `yaml:"binary"`  // path to the cosign executable ("" => resolve "cosign" on PATH)
+	Version string `yaml:"version"` // expected `cosign version` token, e.g. "2.4.1"
+	Digest  string `yaml:"digest"`  // expected sha256 of the binary (bare hex or sha256:-prefixed)
 }
 
 // VerifyIdentityConfig is one allowed keyless signer.
@@ -46,6 +68,16 @@ func (c *Config) signatureMode() verify.Mode {
 	}
 	m, _ := verify.ParseMode(c.Verify.Signature.Mode)
 	return m
+}
+
+// signatureVerifierKind returns the effective signature backend token,
+// defaulting to cosign when unset.
+func (c *Config) signatureVerifierKind() string {
+	v := strings.ToLower(strings.TrimSpace(c.Verify.Signature.Verifier))
+	if v == "" {
+		return sigVerifierCosign
+	}
+	return v
 }
 
 // vulnAxis returns the effective vuln mode and threshold, applying the default
@@ -104,6 +136,9 @@ func (c *Config) validateVerify() error {
 				return fmt.Errorf("verify.signature.identities[%d].san must not be empty", i)
 			}
 		}
+		if err := c.validateSignatureVerifier(); err != nil {
+			return err
+		}
 	}
 
 	vulnMode, _ := c.vulnAxis()
@@ -111,6 +146,52 @@ func (c *Config) validateVerify() error {
 		return fmt.Errorf("verify.enabled=true but neither the signature nor the vuln axis is active")
 	}
 	return nil
+}
+
+// validateSignatureVerifier enforces backend selection and, for cosign, the
+// mandatory binary pin. Called only when the signature axis is active.
+func (c *Config) validateSignatureVerifier() error {
+	switch c.signatureVerifierKind() {
+	case sigVerifierCosign:
+		return validateCosignPin(c.Verify.Signature.Cosign)
+	case sigVerifierSigstore:
+		return fmt.Errorf("verify.signature.verifier %q is experimental and not enabled in this build; use %q (see docs/verify-gate.md and docs/the design notes-signature-verifier.md)", sigVerifierSigstore, sigVerifierCosign)
+	default:
+		return fmt.Errorf("verify.signature.verifier %q is not recognised (want %q or %q)", c.Verify.Signature.Verifier, sigVerifierCosign, sigVerifierSigstore)
+	}
+}
+
+// validateCosignPin requires both a version and a sha256 digest so the gate
+// verifies against a known-good binary and never trusts ambient tooling.
+func validateCosignPin(cc VerifyCosignConfig) error {
+	ver := strings.TrimSpace(cc.Version)
+	dig := normalizeCosignDigest(cc.Digest)
+	if ver == "" || dig == "" {
+		return fmt.Errorf("verify.signature.cosign: both version and digest (sha256) must be pinned when the signature axis is active — the gate must not trust ambient cosign tooling")
+	}
+	if !isSHA256Hex(dig) {
+		return fmt.Errorf("verify.signature.cosign.digest must be a sha256 hex string (64 hex chars, optionally sha256:-prefixed)")
+	}
+	return nil
+}
+
+// normalizeCosignDigest lowercases and strips an optional "sha256:" prefix.
+func normalizeCosignDigest(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.TrimPrefix(s, "sha256:")
+}
+
+// isSHA256Hex reports whether s is exactly 64 lowercase hex characters.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // VerifyPolicy converts the validated config into a runtime verify.Policy. Call
@@ -132,4 +213,26 @@ func (c *Config) VerifyPolicy() verify.Policy {
 	vmode, thr := c.vulnAxis()
 	pol.Vuln = verify.VulnPolicy{Mode: vmode, BlockThreshold: thr}
 	return pol
+}
+
+// SignatureVerifier builds the configured signature verifier, or nil when the
+// signature axis is off (the gate then never invokes it). Assumes validateVerify
+// has already accepted the config; it still returns an error for an unusable
+// backend so a wiring mistake fails closed rather than panicking.
+func (c *Config) SignatureVerifier() (verify.SignatureVerifier, error) {
+	if !c.Verify.Enabled || c.signatureMode() == verify.ModeOff {
+		return nil, nil
+	}
+	switch c.signatureVerifierKind() {
+	case sigVerifierCosign:
+		return &verify.CosignVerifier{
+			Bin:     strings.TrimSpace(c.Verify.Signature.Cosign.Binary),
+			Version: strings.TrimSpace(c.Verify.Signature.Cosign.Version),
+			Digest:  normalizeCosignDigest(c.Verify.Signature.Cosign.Digest),
+		}, nil
+	case sigVerifierSigstore:
+		return nil, fmt.Errorf("verify.signature.verifier %q is experimental and not enabled", sigVerifierSigstore)
+	default:
+		return nil, fmt.Errorf("verify.signature.verifier %q is not recognised", c.Verify.Signature.Verifier)
+	}
 }

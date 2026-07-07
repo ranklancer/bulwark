@@ -32,8 +32,9 @@ The gate evaluates up to two independent axes on the digest-pinned image:
 
 - Signature — the image digest must carry a valid cosign signature from a
   trusted keyless identity (certificate SAN + OIDC issuer) or a trusted public
-  key. Verification is performed by invoking the `cosign` binary; Bulwark does
-  not embed signing/verification cryptography.
+  key. Verification is performed by invoking a *pinned* `cosign` binary (see
+  §4.1 and the design notes); Bulwark does not embed signing/verification cryptography
+  and does not trust an unpinned `cosign` on `PATH`.
 - Vulnerability — the image must carry no vulnerability at or above a configured
   severity threshold. Vulnerability data is read from the same pluggable CVE
   source used by the security-urgency feature (Trivy/Grype reports).
@@ -76,6 +77,16 @@ The `verify:` block (see `configs/bulwark.example.yaml`):
 - `signature.key` — path/ref to a cosign public key for keyed verification. When
   set, keyed verification is attempted first. Provide via `${VAR}` and a mounted
   secret; never commit key material.
+- `signature.verifier` (`cosign`|`sigstore-go`) — signature backend. Defaults to
+  `cosign`. `sigstore-go` is experimental and rejected at startup (see §4.1 and
+  the design notes).
+- `signature.cosign.binary` — path to the cosign executable (default: resolve
+  `cosign` on `PATH`).
+- `signature.cosign.version` — expected `cosign version` token (e.g. `2.4.1`).
+  Required when the signature axis is active.
+- `signature.cosign.digest` — expected SHA-256 of the cosign binary (bare hex or
+  `sha256:`-prefixed). Required when the signature axis is active; a public,
+  non-secret integrity value.
 - `vuln.mode` (`off`|`warn`|`block`) — defaults to `block` when a threshold is
   set.
 - `vuln.block_threshold` (`off`|`high`|`critical`) — the lowest severity that
@@ -84,6 +95,25 @@ The `verify:` block (see `configs/bulwark.example.yaml`):
 
 At least one axis must be active when `enabled` is true; an all-inactive block
 is rejected at startup.
+
+## 4.1 Signature verifier backends
+
+Signature verification is pluggable behind the `SignatureVerifier` interface.
+Two implementations are planned; the first is the enabled default.
+
+- cosign-binary (now, hardened) — the default. Shells out to a pinned `cosign`
+  binary (version + sha256 digest, verified before use, fail-closed). Smallest
+  dependency footprint; native support for registry image references.
+- sigstore-go (fast-follow, not enabled) — an in-process backend built on
+  sigstore-go bundle verification. Present as an interface-conformant stub and
+  rejected at startup; the dependency is intentionally not yet added because it
+  materially enlarges the module. For registry image references specifically,
+  cosign's own verification package (the Kyverno pattern) is the recorded
+  in-process option.
+
+The trade-offs (module size, error typing, registry-image-verification
+maturity) and the full rationale are recorded in the design notes
+(`docs/the design notes-signature-verifier.md`).
 
 ## 5. Break-glass
 
@@ -110,7 +140,10 @@ Every verdict is surfaced through existing channels:
 
 ## 7. Runtime prerequisites
 
-- `cosign` must be present on the daemon's PATH for the signature axis.
+- A `cosign` binary matching the pinned `verify.signature.cosign.version` and
+  `verify.signature.cosign.digest` must be available to the daemon for the
+  signature axis. Its integrity is checked before first use; a missing or
+  mismatched binary fails closed (blocks) rather than trusting ambient tooling.
 - The vulnerability axis requires a configured `security.cve_source` (Trivy or
   Grype report directory).
 - Signing key material and any webhook secrets are provisioned as Docker secrets

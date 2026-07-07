@@ -332,6 +332,9 @@ verify:
   enabled: false                 # opt-in; false == zero behavior change
   signature:
     mode: block                  # off | warn | block  (default: block when enabled)
+    # Signature backend. cosign (default) shells out to a PINNED cosign binary;
+    # sigstore-go is experimental and rejected at startup (see docs/the design notes-signature-verifier.md).
+    verifier: cosign
     # Keyless (Fulcio/OIDC) allowed signers. Any single match trusts the image.
     identities:
       - san: "^https://github.com/your-org/.+$"          # regexp matched against the cert SAN
@@ -340,6 +343,16 @@ verify:
     # keyed verification is attempted first. Keep key material OUT of this file
     # — mount it as a Docker secret and reference the path via ${VAR}.
     key: ""                      # e.g. "${BULWARK_COSIGN_PUBKEY}"
+    # Pin the cosign binary the gate shells out to, so the gate verifies against a
+    # known-good tool instead of whatever cosign is on PATH. Both version AND digest
+    # are REQUIRED when the signature axis is active — a missing or mismatched binary
+    # fails closed. The digest is public integrity metadata (not a secret); compute it
+    # with: sha256sum "$(command -v cosign)" and confirm against the cosign release
+    # checksums before pinning.
+    cosign:
+      binary: "cosign"           # path to the cosign executable (default: resolve on PATH)
+      version: "2.4.1"           # expected `cosign version` token
+      digest: "sha256:REPLACE_WITH_64_HEX_SHA256_OF_YOUR_COSIGN_BINARY"
   vuln:
     mode: block                  # off | warn | block  (default: block when a threshold is set)
     block_threshold: "off"       # off | high | critical — consumes the security.cve_source reports

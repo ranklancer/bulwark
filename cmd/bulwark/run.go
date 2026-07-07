@@ -298,9 +298,17 @@ Flags:`)
 	// verify.enabled is false. cosign is invoked as an external binary.
 	var verifyGate *verify.Gate
 	if loaded != nil && loaded.Verify.Enabled {
+		// Build the signature verifier from the verify.signature config
+		// (backend selection + the mandatory pinned cosign binary). A bad or
+		// experimental backend is rejected here so the daemon fails closed at
+		// startup rather than admitting images through a broken gate.
+		sigVerifier, err := loaded.SignatureVerifier()
+		if err != nil {
+			return fmt.Errorf("run: verify: %w", err)
+		}
 		verifyGate = &verify.Gate{
 			Policy:    loaded.VerifyPolicy(),
-			Signature: &verify.CosignVerifier{},
+			Signature: sigVerifier,
 			Vulns:     cveSource,
 		}
 	}
