@@ -18,16 +18,16 @@ import (
 // It mirrors configstore.NotifierEntry minus the server-controlled fields
 // (ID + timestamps); the server fills those in before persisting.
 type notifierCreateRequest struct {
-	Name          string                                 `json:"name"`
-	Kind          string                                 `json:"kind"`
-	MinLevel      string                                 `json:"min_level,omitempty"`
-	Enabled       bool                                   `json:"enabled"`
-	Slack         *configstore.SlackSettings             `json:"slack,omitempty"`
-	Discord       *configstore.DiscordSettings           `json:"discord,omitempty"`
-	Teams         *configstore.TeamsSettings             `json:"teams,omitempty"`
-	SMTP          *configstore.SMTPSettings              `json:"smtp,omitempty"`
-	HomeAssistant *configstore.HomeAssistantSettings     `json:"homeassistant,omitempty"`
-	Ntfy          *configstore.NtfySettings              `json:"ntfy,omitempty"`
+	Name          string                             `json:"name"`
+	Kind          string                             `json:"kind"`
+	MinLevel      string                             `json:"min_level,omitempty"`
+	Enabled       bool                               `json:"enabled"`
+	Slack         *configstore.SlackSettings         `json:"slack,omitempty"`
+	Discord       *configstore.DiscordSettings       `json:"discord,omitempty"`
+	Teams         *configstore.TeamsSettings         `json:"teams,omitempty"`
+	SMTP          *configstore.SMTPSettings          `json:"smtp,omitempty"`
+	HomeAssistant *configstore.HomeAssistantSettings `json:"homeassistant,omitempty"`
+	Ntfy          *configstore.NtfySettings          `json:"ntfy,omitempty"`
 }
 
 // toEntry builds a configstore.NotifierEntry from the wire request.

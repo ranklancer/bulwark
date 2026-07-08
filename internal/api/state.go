@@ -576,18 +576,18 @@ func (h *StateHandler) listAudit(w http.ResponseWriter, r *http.Request) {
 // don't go to the Docker socket here — the latest scan already contains
 // the data + we want the dashboard to be view-only/cheap.
 type containerView struct {
-	ContainerID    string `json:"container_id,omitempty"`
-	ContainerName  string `json:"container_name"`
-	Image          string `json:"image,omitempty"`
-	ComposeProject string `json:"compose_project,omitempty"`
-	Skipped        bool   `json:"skipped,omitempty"`
-	SkipReason     string `json:"skip_reason,omitempty"`
-	UpdateAvailable bool  `json:"update_available"`
-	Level          string `json:"level,omitempty"`
-	From           string `json:"from,omitempty"`
-	To             string `json:"to,omitempty"`
-	LastScanID     string `json:"last_scan_id,omitempty"`
-	LastScanAt     string `json:"last_scan_at,omitempty"`
+	ContainerID     string `json:"container_id,omitempty"`
+	ContainerName   string `json:"container_name"`
+	Image           string `json:"image,omitempty"`
+	ComposeProject  string `json:"compose_project,omitempty"`
+	Skipped         bool   `json:"skipped,omitempty"`
+	SkipReason      string `json:"skip_reason,omitempty"`
+	UpdateAvailable bool   `json:"update_available"`
+	Level           string `json:"level,omitempty"`
+	From            string `json:"from,omitempty"`
+	To              string `json:"to,omitempty"`
+	LastScanID      string `json:"last_scan_id,omitempty"`
+	LastScanAt      string `json:"last_scan_at,omitempty"`
 }
 
 func (h *StateHandler) listContainers(w http.ResponseWriter, _ *http.Request) {
@@ -609,18 +609,18 @@ func (h *StateHandler) listContainers(w http.ResponseWriter, _ *http.Request) {
 	scanAt := full.FinishedAt.UTC().Format(time.RFC3339)
 	for _, r := range full.Results {
 		views = append(views, containerView{
-			ContainerID:    r.ContainerID,
-			ContainerName:  r.ContainerName,
-			Image:          r.Image,
-			ComposeProject: r.ComposeProject,
-			Skipped:        r.Skipped,
-			SkipReason:     r.SkipReason,
+			ContainerID:     r.ContainerID,
+			ContainerName:   r.ContainerName,
+			Image:           r.Image,
+			ComposeProject:  r.ComposeProject,
+			Skipped:         r.Skipped,
+			SkipReason:      r.SkipReason,
 			UpdateAvailable: r.UpdateAvailable,
-			Level:          r.Level.String(),
-			From:           r.From,
-			To:             r.To,
-			LastScanID:     full.ID,
-			LastScanAt:     scanAt,
+			Level:           r.Level.String(),
+			From:            r.From,
+			To:              r.To,
+			LastScanID:      full.ID,
+			LastScanAt:      scanAt,
 		})
 	}
 	writeJSON(w, http.StatusOK, views)
@@ -699,8 +699,8 @@ func (h *StateHandler) getConfig(w http.ResponseWriter, _ *http.Request) {
 // operators can see exactly what each tier maps to and which stacks /
 // containers carry overrides without having to mentally merge YAML.
 type policiesView struct {
-	Classifier any         `json:"classifier"`
-	Overrides  any         `json:"overrides"`
+	Classifier any `json:"classifier"`
+	Overrides  any `json:"overrides"`
 }
 
 func (h *StateHandler) getPolicies(w http.ResponseWriter, _ *http.Request) {
@@ -836,7 +836,7 @@ func (h *StateHandler) postSession(w http.ResponseWriter, r *http.Request) {
 	value, exp := h.Sessions.Issue()
 	http.SetCookie(w, h.Sessions.BuildCookie(value, exp, isSecureRequest(r)))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"expires_at": exp.UTC().Format(time.RFC3339),
+		"expires_at":  exp.UTC().Format(time.RFC3339),
 		"ttl_seconds": int(time.Until(exp).Seconds()),
 	})
 }

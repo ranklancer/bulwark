@@ -25,8 +25,8 @@ func queueFixture(t *testing.T) *store.Store {
 		Summary:    store.ScanSummary{Total: 2, Pending: 2, Review: 1, Breaking: 1},
 		Results: []store.ScanResultRecord{
 			{
-				ContainerName: "sonarr",
-				Image:         "lscr.io/linuxserver/sonarr:4.0.10",
+				ContainerName:   "sonarr",
+				Image:           "lscr.io/linuxserver/sonarr:4.0.10",
 				UpdateAvailable: true,
 				Level:           types.RiskReview,
 				Kind:            types.ChangeMinor,
@@ -34,8 +34,8 @@ func queueFixture(t *testing.T) *store.Store {
 				RegistryDigest: "sha256:sonarrnew",
 			},
 			{
-				ContainerName: "auth",
-				Image:         "ghcr.io/owner/auth:1.0",
+				ContainerName:   "auth",
+				Image:           "ghcr.io/owner/auth:1.0",
 				UpdateAvailable: true,
 				Level:           types.RiskBreaking,
 				Kind:            types.ChangeMajor,

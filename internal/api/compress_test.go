@@ -21,12 +21,12 @@ func TestNegotiateEncoding(t *testing.T) {
 		{"identity", ""},
 		{"gzip", "gzip"},
 		{"br", "br"},
-		{"gzip, deflate, br", "br"},      // br wins when both present
-		{"gzip;q=1.0", "gzip"},           // q-values stripped
-		{"br;q=1.0, gzip;q=0.5", "br"},   // br wins regardless of q
-		{"deflate", ""},                  // deflate not supported
-		{"GZIP", "gzip"},                 // case-insensitive
-		{"  br  ,  gzip  ", "br"},        // whitespace tolerant
+		{"gzip, deflate, br", "br"},    // br wins when both present
+		{"gzip;q=1.0", "gzip"},         // q-values stripped
+		{"br;q=1.0, gzip;q=0.5", "br"}, // br wins regardless of q
+		{"deflate", ""},                // deflate not supported
+		{"GZIP", "gzip"},               // case-insensitive
+		{"  br  ,  gzip  ", "br"},      // whitespace tolerant
 	}
 	for _, tc := range cases {
 		if got := negotiateEncoding(tc.header); got != tc.want {

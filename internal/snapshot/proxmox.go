@@ -27,12 +27,12 @@ const (
 // Proxmox API base; Token is the full "user@realm!tokenid=secret"
 // string as issued by the Proxmox UI's API Tokens page.
 type ProxmoxConfig struct {
-	URL          string
-	Token        string
-	Node         string
-	VMID         int
-	Kind         ProxmoxKind
-	InsecureTLS  bool
+	URL         string
+	Token       string
+	Node        string
+	VMID        int
+	Kind        ProxmoxKind
+	InsecureTLS bool
 
 	// HTTPClient overrides the constructed *http.Client. Tests inject
 	// an httptest server's client here.

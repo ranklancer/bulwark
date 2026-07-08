@@ -89,11 +89,11 @@ func TestRegistry_DeleteUIRemovesEntry(t *testing.T) {
 	}
 	id := mustID(t)
 	if err := reg.AddUI(configstore.NotifierEntry{
-		ID:    id,
-		Name:  "to-delete",
-		Kind:  configstore.KindSlack,
-		Enabled: true,
-		Slack: &configstore.SlackSettings{WebhookURL: "https://hooks.slack.com/x/y"},
+		ID:        id,
+		Name:      "to-delete",
+		Kind:      configstore.KindSlack,
+		Enabled:   true,
+		Slack:     &configstore.SlackSettings{WebhookURL: "https://hooks.slack.com/x/y"},
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}); err != nil {
@@ -133,11 +133,11 @@ func TestRegistry_FindUIEntry(t *testing.T) {
 	}
 	id := mustID(t)
 	if err := reg.AddUI(configstore.NotifierEntry{
-		ID:    id,
-		Name:  "findme",
-		Kind:  configstore.KindSlack,
-		Enabled: true,
-		Slack: &configstore.SlackSettings{WebhookURL: "https://hooks.slack.com/x/y"},
+		ID:        id,
+		Name:      "findme",
+		Kind:      configstore.KindSlack,
+		Enabled:   true,
+		Slack:     &configstore.SlackSettings{WebhookURL: "https://hooks.slack.com/x/y"},
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
 	}); err != nil {

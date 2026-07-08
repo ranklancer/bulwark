@@ -28,11 +28,11 @@ import (
 // to a follow-up — the hardcoded mapping is conservative enough that
 // most operators won't want to tune it.
 type NtfyNotifier struct {
-	HTTPClient *http.Client
-	ServerURL  string
-	Topic      string
-	Token      string
-	Min        types.RiskLevel
+	HTTPClient  *http.Client
+	ServerURL   string
+	Topic       string
+	Token       string
+	Min         types.RiskLevel
 	channelName string
 }
 

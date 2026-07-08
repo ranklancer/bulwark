@@ -37,14 +37,14 @@ const (
 // Context carries the per-update facts a hook script needs. It's serialised
 // into BULWARK_* env vars before invocation; scripts read them via the shell.
 type Context struct {
-	Action        Action
-	Container     string
-	OldImage      string
-	NewImage      string
-	OldDigest     string
-	NewDigest     string
-	SnapshotID    string
-	ContainerID   string
+	Action      Action
+	Container   string
+	OldImage    string
+	NewImage    string
+	OldDigest   string
+	NewDigest   string
+	SnapshotID  string
+	ContainerID string
 }
 
 // envFor flattens the context into the env-var key/value pairs the runner

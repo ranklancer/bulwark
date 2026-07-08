@@ -50,7 +50,7 @@ func NewSlack(webhookURL, channelOverride string, min types.RiskLevel, name stri
 	}, nil
 }
 
-func (s *SlackNotifier) Name() string             { return s.channelName }
+func (s *SlackNotifier) Name() string              { return s.channelName }
 func (s *SlackNotifier) MinLevel() types.RiskLevel { return s.Min }
 
 // Notify renders events as a single Block Kit message and POSTs it.

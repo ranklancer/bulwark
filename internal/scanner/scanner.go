@@ -17,8 +17,8 @@ import (
 	"sync"
 
 	"github.com/bulwark-docker/bulwark/internal/classifier"
-	"github.com/bulwark-docker/bulwark/internal/cve"
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/cve"
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"

@@ -56,7 +56,7 @@ func TestStateAPI_GetHost_ReturnsFixture(t *testing.T) {
 
 func TestStateAPI_GetHost_NoLoadedConfig(t *testing.T) {
 	fixture := &detect.Result{
-		Platform: detect.PlatformProxmox,
+		Platform:     detect.PlatformProxmox,
 		Capabilities: []detect.Capability{detect.CapProxmoxAPI},
 	}
 	h := &StateHandler{

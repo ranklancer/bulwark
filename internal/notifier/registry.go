@@ -39,14 +39,14 @@ type Entry struct {
 // fresh Dispatcher under a single atomic store so in-flight Dispatch
 // calls always see a consistent set.
 type Registry struct {
-	logger    *slog.Logger
-	timeout   time.Duration
-	yamlList  []Entry
-	store     *configstore.Store
+	logger   *slog.Logger
+	timeout  time.Duration
+	yamlList []Entry
+	store    *configstore.Store
 
-	mu          sync.RWMutex
-	entries     []Entry
-	dispatcher  atomic.Pointer[Dispatcher]
+	mu         sync.RWMutex
+	entries    []Entry
+	dispatcher atomic.Pointer[Dispatcher]
 }
 
 // NewRegistry constructs a Registry from a yaml-defined notifier list +
@@ -306,4 +306,3 @@ func (r *Registry) DeleteUI(id string) error {
 	}
 	return r.Reload()
 }
-

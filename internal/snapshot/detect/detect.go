@@ -49,9 +49,9 @@ const (
 type Capability string
 
 const (
-	CapZFS         Capability = "zfs"          // zfs binary + module present
-	CapBtrfs       Capability = "btrfs"        // btrfs binary + at least one mount
-	CapProxmoxAPI  Capability = "proxmox-api"  // /etc/pve cluster fs present
+	CapZFS        Capability = "zfs"         // zfs binary + module present
+	CapBtrfs      Capability = "btrfs"       // btrfs binary + at least one mount
+	CapProxmoxAPI Capability = "proxmox-api" // /etc/pve cluster fs present
 )
 
 // Result is the full output of one detection pass. Platform is the
@@ -66,10 +66,10 @@ const (
 // /etc/version) so the dashboard can show "Unraid 6.12.x" without an
 // extra round-trip. Empty when unknown.
 type Result struct {
-	Platform       Platform     `json:"platform"`
-	VersionString  string       `json:"version,omitempty"`
-	Capabilities   []Capability `json:"capabilities"`
-	SuggestedBackend string     `json:"suggested_backend,omitempty"` // "zfs" | "btrfs" | ""
+	Platform         Platform     `json:"platform"`
+	VersionString    string       `json:"version,omitempty"`
+	Capabilities     []Capability `json:"capabilities"`
+	SuggestedBackend string       `json:"suggested_backend,omitempty"` // "zfs" | "btrfs" | ""
 }
 
 // Detect runs a detection pass against the live host filesystem.

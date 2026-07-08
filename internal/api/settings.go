@@ -18,7 +18,7 @@ import (
 // PATCH (including the restart-required metadata) so the dashboard
 // renders the right tab set without re-keying the enumeration.
 type settingsResponse struct {
-	Settings configstore.SettingsOverride `json:"settings"`
+	Settings configstore.SettingsOverride  `json:"settings"`
 	Sections []configstore.SettingsSection `json:"sections"`
 }
 
@@ -27,8 +27,8 @@ type settingsResponse struct {
 // compact summary of which sections currently carry an override (so
 // the dashboard can render "modified from yaml" badges).
 type effectiveConfigResponse struct {
-	Config              any      `json:"config"`
-	OverriddenSections  []string `json:"overridden_sections"`
+	Config             any      `json:"config"`
+	OverriddenSections []string `json:"overridden_sections"`
 }
 
 func (h *StateHandler) getSettings(w http.ResponseWriter, _ *http.Request) {

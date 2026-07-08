@@ -250,4 +250,3 @@ func cmdHistoryPrune(args []string, stdout, stderr io.Writer, deps historyDeps) 
 	fmt.Fprintf(stdout, "pruned %d scan record(s) (kept the %d most recent).\n", pruned, *keep)
 	return nil
 }
-

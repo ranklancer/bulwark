@@ -191,7 +191,7 @@ func TestMountUIRoutes_CacheHeaders(t *testing.T) {
 	legacy := []byte(`<!doctype html><title>vanilla</title>`)
 	reactIndex := []byte(`<!doctype html><script type="module" src="/assets/index-abc.js"></script>`)
 	reactFS := fstest.MapFS{
-		"index.html":        &fstest.MapFile{Data: reactIndex},
+		"index.html":          &fstest.MapFile{Data: reactIndex},
 		"assets/index-abc.js": &fstest.MapFile{Data: []byte(`console.log("ok")`)},
 	}
 
@@ -201,9 +201,9 @@ func TestMountUIRoutes_CacheHeaders(t *testing.T) {
 	defer srv.Close()
 
 	checks := []struct {
-		name     string
-		path     string
-		wantCC   string
+		name      string
+		path      string
+		wantCC    string
 		notWantCC string
 	}{
 		{

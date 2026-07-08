@@ -24,8 +24,8 @@ type fakeSnapshotBackend struct {
 	failOnRestore  bool
 }
 
-func (f *fakeSnapshotBackend) Name() string                                 { return "fake" }
-func (f *fakeSnapshotBackend) Available(_ context.Context) bool             { return true }
+func (f *fakeSnapshotBackend) Name() string                     { return "fake" }
+func (f *fakeSnapshotBackend) Available(_ context.Context) bool { return true }
 func (f *fakeSnapshotBackend) List(_ context.Context, _ string) ([]snapshot.Snapshot, error) {
 	return nil, nil
 }

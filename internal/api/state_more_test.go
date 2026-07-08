@@ -349,11 +349,13 @@ type fakeSnapshotBackend struct {
 	err   error
 }
 
-func (f *fakeSnapshotBackend) Name() string                                            { return "fake" }
-func (f *fakeSnapshotBackend) Available(_ context.Context) bool                        { return true }
-func (f *fakeSnapshotBackend) Snapshot(_ context.Context, _, _ string) (string, error) { return "", nil }
-func (f *fakeSnapshotBackend) Restore(_ context.Context, _ string) error               { return nil }
-func (f *fakeSnapshotBackend) Destroy(_ context.Context, _ string) error               { return nil }
+func (f *fakeSnapshotBackend) Name() string                     { return "fake" }
+func (f *fakeSnapshotBackend) Available(_ context.Context) bool { return true }
+func (f *fakeSnapshotBackend) Snapshot(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+func (f *fakeSnapshotBackend) Restore(_ context.Context, _ string) error { return nil }
+func (f *fakeSnapshotBackend) Destroy(_ context.Context, _ string) error { return nil }
 func (f *fakeSnapshotBackend) List(_ context.Context, _ string) ([]snapshot.Snapshot, error) {
 	return f.snaps, f.err
 }

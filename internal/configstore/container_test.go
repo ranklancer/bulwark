@@ -56,12 +56,12 @@ func TestComputeEffectiveSnapshot(t *testing.T) {
 	str := func(s string) *string { return &s }
 	bo := func(b bool) *bool { return &b }
 	cases := []struct {
-		name         string
-		labels       map[string]string
-		override     ContainerOverride
-		wantDataset  string
-		wantAuto     bool
-		wantReason   string
+		name        string
+		labels      map[string]string
+		override    ContainerOverride
+		wantDataset string
+		wantAuto    bool
+		wantReason  string
 	}{
 		{
 			"override-dataset wins over everything",

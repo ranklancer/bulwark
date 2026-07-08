@@ -256,4 +256,3 @@ func shortDigest(d string) string {
 	}
 	return d
 }
-

@@ -27,19 +27,19 @@ func stateFixture(t *testing.T) *store.Store {
 		Summary:    store.ScanSummary{Total: 2, Pending: 2, Review: 1, Breaking: 1},
 		Results: []store.ScanResultRecord{
 			{
-				ContainerName: "sonarr",
-				Image:         "lscr.io/.../sonarr:1",
+				ContainerName:   "sonarr",
+				Image:           "lscr.io/.../sonarr:1",
 				UpdateAvailable: true,
 				Level:           types.RiskReview,
 				From:            "1", To: "2",
 				RegistryDigest: "sha256:sonarrnew",
 			},
 			{
-				ContainerName: "auth",
-				Image:         "ghcr.io/owner/auth:1",
+				ContainerName:   "auth",
+				Image:           "ghcr.io/owner/auth:1",
 				UpdateAvailable: true,
 				Level:           types.RiskBreaking,
-				RegistryDigest: "sha256:authnew",
+				RegistryDigest:  "sha256:authnew",
 			},
 		},
 	})

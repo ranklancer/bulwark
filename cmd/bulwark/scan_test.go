@@ -58,7 +58,7 @@ func TestCmdScan_JSON_OneUpdate_OneNoChange_OneSkipped(t *testing.T) {
 			},
 			{
 				ID: "c3", Name: "secret",
-				Image: "ghcr.io/owner/private:1.0",
+				Image:  "ghcr.io/owner/private:1.0",
 				Labels: map[string]string{"bulwark.enable": "false"},
 			},
 		},

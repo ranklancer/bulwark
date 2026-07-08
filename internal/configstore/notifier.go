@@ -42,13 +42,13 @@ func KnownKinds() []NotifierKind {
 // deliberately not UUIDs (no new dep) but provide enough collision
 // resistance for a per-install notifier count.
 type NotifierEntry struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Kind          NotifierKind `json:"kind"`
-	MinLevel      string    `json:"min_level,omitempty"` // "" defaults to "review" at runtime
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID        string       `json:"id"`
+	Name      string       `json:"name"`
+	Kind      NotifierKind `json:"kind"`
+	MinLevel  string       `json:"min_level,omitempty"` // "" defaults to "review" at runtime
+	Enabled   bool         `json:"enabled"`
+	CreatedAt time.Time    `json:"created_at"`
+	UpdatedAt time.Time    `json:"updated_at"`
 
 	Slack         *SlackSettings         `json:"slack,omitempty"`
 	Discord       *DiscordSettings       `json:"discord,omitempty"`
@@ -100,8 +100,8 @@ type SMTPSettings struct {
 // dispatch behaviour mirrors the existing yaml `notifications.homeassistant`
 // block (Persistent / Push / Critical booleans per risk level).
 type HomeAssistantSettings struct {
-	URL   string                     `json:"url"`
-	Token string                     `json:"token"`
+	URL      string          `json:"url"`
+	Token    string          `json:"token"`
 	Safe     HALevelDispatch `json:"safe,omitempty"`
 	Review   HALevelDispatch `json:"review,omitempty"`
 	Breaking HALevelDispatch `json:"breaking,omitempty"`

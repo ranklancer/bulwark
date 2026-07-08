@@ -238,15 +238,15 @@ func (h *DIUNHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// --- Build a notifier event, dedup-filter, dispatch, mark sent. ------
 	if h.Notifier != nil && len(h.Notifier.Notifiers()) > 0 {
 		evt := notifier.Event{
-			Container: resp.ContainerName,
-			Image:     payload.Image,
-			Risk:      assessment.Level,
-			From:      assessment.Delta.From,
-			To:        assessment.Delta.To,
-			Kind:      assessment.Delta.Kind,
-			Confidence: assessment.Confidence,
-			Rationale:  assessment.Rationale,
-			ReleaseURL: assessment.ReleaseURL,
+			Container:      resp.ContainerName,
+			Image:          payload.Image,
+			Risk:           assessment.Level,
+			From:           assessment.Delta.From,
+			To:             assessment.Delta.To,
+			Kind:           assessment.Delta.Kind,
+			Confidence:     assessment.Confidence,
+			Rationale:      assessment.Rationale,
+			ReleaseURL:     assessment.ReleaseURL,
 			LocalDigest:    current.Digest,
 			RegistryDigest: available.Digest,
 			Timestamp:      now().UTC(),
@@ -351,4 +351,3 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 		_ = err
 	}
 }
-

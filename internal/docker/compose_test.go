@@ -74,9 +74,9 @@ func TestContainer_DependsOn(t *testing.T) {
 	})
 	t.Run("compose container with depends_on", func(t *testing.T) {
 		c := Container{Labels: map[string]string{
-			"com.docker.compose.project":     "demo",
-			"com.docker.compose.service":     "web",
-			"com.docker.compose.depends_on":  "db:service_started:true,cache:service_healthy:true",
+			"com.docker.compose.project":    "demo",
+			"com.docker.compose.service":    "web",
+			"com.docker.compose.depends_on": "db:service_started:true,cache:service_healthy:true",
 		}}
 		got := c.DependsOn()
 		want := []string{"db", "cache"}

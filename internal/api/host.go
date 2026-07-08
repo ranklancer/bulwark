@@ -10,11 +10,11 @@ import (
 // Snapshots page uses it to render the "Detected platform" panel and
 // to suggest a backend when the operator hasn't configured one.
 type hostView struct {
-	Platform         string   `json:"platform"`
-	Version          string   `json:"version,omitempty"`
-	Capabilities     []string `json:"capabilities"`
-	SuggestedBackend string   `json:"suggested_backend,omitempty"`
-	ConfiguredBackend string  `json:"configured_backend,omitempty"`
+	Platform          string   `json:"platform"`
+	Version           string   `json:"version,omitempty"`
+	Capabilities      []string `json:"capabilities"`
+	SuggestedBackend  string   `json:"suggested_backend,omitempty"`
+	ConfiguredBackend string   `json:"configured_backend,omitempty"`
 }
 
 func (h *StateHandler) getHost(w http.ResponseWriter, _ *http.Request) {

@@ -37,13 +37,13 @@ func TestSlack_NotifySendsBlockKit(t *testing.T) {
 		t.Fatalf("NewSlack: %v", err)
 	}
 	err = n.Notify(context.Background(), []Event{{
-		Container: "sonarr",
-		Image:     "lscr.io/linuxserver/sonarr",
-		From:      "4.0.10-ls45",
-		To:        "4.0.10-ls46",
-		Risk:      types.RiskSafe,
-		Kind:      types.ChangeLSIORebuild,
-		Rationale: "LinuxServer.io rebuild — base image refreshed.",
+		Container:  "sonarr",
+		Image:      "lscr.io/linuxserver/sonarr",
+		From:       "4.0.10-ls45",
+		To:         "4.0.10-ls46",
+		Risk:       types.RiskSafe,
+		Kind:       types.ChangeLSIORebuild,
+		Rationale:  "LinuxServer.io rebuild — base image refreshed.",
 		ReleaseURL: "https://example.com/notes",
 	}})
 	if err != nil {

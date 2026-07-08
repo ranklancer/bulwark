@@ -58,7 +58,7 @@ func NewGeneric(url, method string, headers map[string]string, min types.RiskLev
 	}, nil
 }
 
-func (g *GenericNotifier) Name() string             { return g.channelName }
+func (g *GenericNotifier) Name() string              { return g.channelName }
 func (g *GenericNotifier) MinLevel() types.RiskLevel { return g.Min }
 
 // genericEvent is the wire shape — explicitly named fields so JSON consumers

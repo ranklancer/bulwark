@@ -13,17 +13,17 @@ import (
 
 // fakeNotifier is a programmable Notifier for Dispatcher tests.
 type fakeNotifier struct {
-	name     string
-	min      types.RiskLevel
-	err      error
-	gotMu    sync.Mutex
-	gotEvts  []Event
-	calls    int32
-	delay    time.Duration
+	name    string
+	min     types.RiskLevel
+	err     error
+	gotMu   sync.Mutex
+	gotEvts []Event
+	calls   int32
+	delay   time.Duration
 }
 
-func (f *fakeNotifier) Name() string                { return f.name }
-func (f *fakeNotifier) MinLevel() types.RiskLevel   { return f.min }
+func (f *fakeNotifier) Name() string              { return f.name }
+func (f *fakeNotifier) MinLevel() types.RiskLevel { return f.min }
 func (f *fakeNotifier) Notify(ctx context.Context, events []Event) error {
 	atomic.AddInt32(&f.calls, 1)
 	if f.delay > 0 {

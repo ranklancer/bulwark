@@ -10,8 +10,8 @@ func TestDetectFS_TrueNASScale(t *testing.T) {
 	// module is always loaded; the platform value must win over the
 	// generic ZFS classification.
 	probe := fstest.MapFS{
-		"etc/version":     &fstest.MapFile{Data: []byte("TrueNAS-SCALE-24.04.0\n")},
-		"sys/module/zfs":  &fstest.MapFile{Mode: 0o755 | (1 << 31)}, // directory
+		"etc/version":    &fstest.MapFile{Data: []byte("TrueNAS-SCALE-24.04.0\n")},
+		"sys/module/zfs": &fstest.MapFile{Mode: 0o755 | (1 << 31)}, // directory
 	}
 	got := DetectFS(probe)
 	if got.Platform != PlatformTrueNAS {
@@ -32,9 +32,9 @@ func TestDetectFS_ProxmoxVE(t *testing.T) {
 	// Proxmox always mounts /etc/pve. Usually has ZFS too but not
 	// guaranteed; we still classify it as proxmox.
 	probe := fstest.MapFS{
-		"etc/pve":          &fstest.MapFile{Mode: 0o755 | (1 << 31)},
-		"etc/pve/version":  &fstest.MapFile{Data: []byte("8.1.4\n")},
-		"sys/module/zfs":   &fstest.MapFile{Mode: 0o755 | (1 << 31)},
+		"etc/pve":         &fstest.MapFile{Mode: 0o755 | (1 << 31)},
+		"etc/pve/version": &fstest.MapFile{Data: []byte("8.1.4\n")},
+		"sys/module/zfs":  &fstest.MapFile{Mode: 0o755 | (1 << 31)},
 	}
 	got := DetectFS(probe)
 	if got.Platform != PlatformProxmox {

@@ -166,7 +166,6 @@ func buildAuthenticator(cfg *config.Config, fallbackBearer string, logger *slog.
 	return nil, fmt.Errorf("api.auth.type=%q is not supported (validation should have caught this)", t)
 }
 
-
 // isLoopbackListen reports whether listen binds only the loopback interface.
 // A bare ":8080", "0.0.0.0:8080", "[::]:8080" or "*" binds all interfaces and
 // is treated as non-loopback. A host we can't parse as an IP is treated

@@ -21,10 +21,10 @@ import (
 // JSON omitempty leans on the same convention.
 //
 // Fields explicitly left out (and the reason):
-//   * api.listen — needs a server restart; "edit in yaml" instead.
-//   * api.auth.* — secrets live in yaml/env, not in the store schema.
-//   * docker.host — same reasoning: identity of the host is bootstrap-time.
-//   * registries, hooks — large scope, future phase.
+//   - api.listen — needs a server restart; "edit in yaml" instead.
+//   - api.auth.* — secrets live in yaml/env, not in the store schema.
+//   - docker.host — same reasoning: identity of the host is bootstrap-time.
+//   - registries, hooks — large scope, future phase.
 type SettingsOverride struct {
 	Schedule       *ScheduleOverride       `json:"schedule,omitempty"`
 	Classification *ClassificationOverride `json:"classification,omitempty"`
@@ -47,9 +47,9 @@ type ScheduleOverride struct {
 // — each field optional so the dashboard can change one row at a time
 // without forcing the operator to re-key the full set.
 type ClassificationOverride struct {
-	DefaultRisk       *string          `json:"default_risk,omitempty"`
-	Policies          *PolicyOverride  `json:"policies,omitempty"`
-	ChangelogMaxChars *int             `json:"changelog_max_chars,omitempty"`
+	DefaultRisk       *string         `json:"default_risk,omitempty"`
+	Policies          *PolicyOverride `json:"policies,omitempty"`
+	ChangelogMaxChars *int            `json:"changelog_max_chars,omitempty"`
 }
 
 // PolicyOverride mirrors config.PolicyConfig. Empty strings (`&""`)
@@ -137,16 +137,16 @@ type SettingsSection struct {
 // effect on the next daemon start; the dashboard surfaces this clearly
 // so operators know what to expect.
 //
-//   classification — reloads live (scanCycleConfig is rebuilt per scan
-//                    from the merged config).
-//   schedule       — reloads live (scheduler.SetCron is called from
-//                    ReloadConfig).
-//   health         — reloads live (scanJob updates Updater.HealthTimeout
-//                    each cycle from the merged effective config).
-//   logging        — restart required (slog handler level is set once
-//                    at startup; LevelVar refactor is a future phase).
-//   snapshots      — restart required (the backend pointer is wired
-//                    into StateHandler + Updater at startup).
+//	classification — reloads live (scanCycleConfig is rebuilt per scan
+//	                 from the merged config).
+//	schedule       — reloads live (scheduler.SetCron is called from
+//	                 ReloadConfig).
+//	health         — reloads live (scanJob updates Updater.HealthTimeout
+//	                 each cycle from the merged effective config).
+//	logging        — restart required (slog handler level is set once
+//	                 at startup; LevelVar refactor is a future phase).
+//	snapshots      — restart required (the backend pointer is wired
+//	                 into StateHandler + Updater at startup).
 var SettingsSections = []SettingsSection{
 	{Name: "schedule", RestartRequired: false},
 	{Name: "classification", RestartRequired: false},
@@ -365,13 +365,13 @@ func (o SettingsOverride) Validate() error {
 		}
 		if o.Classification.Policies != nil {
 			for field, v := range map[string]*string{
-				"patch":         o.Classification.Policies.Patch,
-				"minor":         o.Classification.Policies.Minor,
-				"major":         o.Classification.Policies.Major,
-				"digest":        o.Classification.Policies.Digest,
-				"latest":        o.Classification.Policies.Latest,
-				"lsio_rebuild":  o.Classification.Policies.LSIORebuild,
-				"prerelease":    o.Classification.Policies.Prerelease,
+				"patch":        o.Classification.Policies.Patch,
+				"minor":        o.Classification.Policies.Minor,
+				"major":        o.Classification.Policies.Major,
+				"digest":       o.Classification.Policies.Digest,
+				"latest":       o.Classification.Policies.Latest,
+				"lsio_rebuild": o.Classification.Policies.LSIORebuild,
+				"prerelease":   o.Classification.Policies.Prerelease,
 			} {
 				if v == nil {
 					continue

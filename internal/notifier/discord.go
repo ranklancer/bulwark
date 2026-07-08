@@ -48,7 +48,7 @@ func NewDiscord(webhookURL string, min types.RiskLevel, name string) (*DiscordNo
 	}, nil
 }
 
-func (d *DiscordNotifier) Name() string             { return d.channelName }
+func (d *DiscordNotifier) Name() string              { return d.channelName }
 func (d *DiscordNotifier) MinLevel() types.RiskLevel { return d.Min }
 
 // Notify sends events as Discord embeds. Up to 10 embeds per message; we

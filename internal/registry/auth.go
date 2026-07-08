@@ -103,9 +103,9 @@ type DockerConfigAuth struct {
 // ~/.docker/config.json. We deliberately ignore everything except the
 // auth-related top-level keys.
 type dockerConfigFile struct {
-	Auths        map[string]dockerConfigAuthEntry `json:"auths"`
-	CredsStore   string                           `json:"credsStore"`
-	CredHelpers  map[string]string                `json:"credHelpers"`
+	Auths       map[string]dockerConfigAuthEntry `json:"auths"`
+	CredsStore  string                           `json:"credsStore"`
+	CredHelpers map[string]string                `json:"credHelpers"`
 }
 
 type dockerConfigAuthEntry struct {

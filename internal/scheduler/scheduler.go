@@ -28,8 +28,8 @@ type Job func(ctx context.Context) error
 // cron tick, so the daemon doesn't sit idle waiting for the next firing
 // after launch.
 type Scheduler struct {
-	Interval       time.Duration  // simple form; ignored when Cron is set
-	Cron           *CronSchedule  // optional; takes precedence over Interval
+	Interval       time.Duration // simple form; ignored when Cron is set
+	Cron           *CronSchedule // optional; takes precedence over Interval
 	Job            Job
 	Logger         *slog.Logger
 	RunImmediately bool
@@ -155,7 +155,7 @@ func (s *Scheduler) runCron(ctx context.Context, logger *slog.Logger, name strin
 	for {
 		cron := s.liveCron.Load()
 		if cron == nil {
-			logger.Info(name+": cron disabled via SetCron(nil); stopping")
+			logger.Info(name + ": cron disabled via SetCron(nil); stopping")
 			return nil
 		}
 		next := cron.Next(now())
@@ -184,7 +184,7 @@ func (s *Scheduler) runCron(ctx context.Context, logger *slog.Logger, name strin
 			if newCron := s.liveCron.Load(); newCron != nil {
 				logger.Info(name+": cron reloaded", "expr", newCron.String())
 			} else {
-				logger.Info(name+": cron reloaded (cleared)")
+				logger.Info(name + ": cron reloaded (cleared)")
 			}
 		}
 	}

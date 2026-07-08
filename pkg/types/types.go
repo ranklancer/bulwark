@@ -81,15 +81,15 @@ func (r *RiskLevel) UnmarshalJSON(b []byte) error {
 type ChangeKind int
 
 const (
-	ChangeUnknown ChangeKind = iota
-	ChangeDigest             // same tag, new digest (rebuild without version bump)
-	ChangePatch              // x.y.Z bump
-	ChangeMinor              // x.Y.z bump
-	ChangeMajor              // X.y.z bump
-	ChangePrerelease         // pre-release identifier changed but base version same
-	ChangeLSIORebuild        // LinuxServer.io -ls<n> suffix bumped, upstream unchanged
-	ChangeLatest             // :latest tag — semver cannot be inferred
-	ChangeNone               // versions are identical (no update needed)
+	ChangeUnknown     ChangeKind = iota
+	ChangeDigest                 // same tag, new digest (rebuild without version bump)
+	ChangePatch                  // x.y.Z bump
+	ChangeMinor                  // x.Y.z bump
+	ChangeMajor                  // X.y.z bump
+	ChangePrerelease             // pre-release identifier changed but base version same
+	ChangeLSIORebuild            // LinuxServer.io -ls<n> suffix bumped, upstream unchanged
+	ChangeLatest                 // :latest tag — semver cannot be inferred
+	ChangeNone                   // versions are identical (no update needed)
 )
 
 func (c ChangeKind) String() string {

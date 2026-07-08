@@ -54,8 +54,8 @@ type runRecorder struct {
 	calls int32
 }
 
-func (r *runRecorder) Name() string                { return "test" }
-func (r *runRecorder) MinLevel() types.RiskLevel   { return types.RiskSafe }
+func (r *runRecorder) Name() string              { return "test" }
+func (r *runRecorder) MinLevel() types.RiskLevel { return types.RiskSafe }
 func (r *runRecorder) Notify(_ context.Context, e []notifier.Event) error {
 	atomic.AddInt32(&r.calls, 1)
 	return nil

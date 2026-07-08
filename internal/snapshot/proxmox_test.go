@@ -180,7 +180,7 @@ func TestProxmox_List_FiltersAndParses(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{
-				{"name": "current", "snaptime": 0}, // synthetic "current" entry; filter out
+				{"name": "current", "snaptime": 0},              // synthetic "current" entry; filter out
 				{"name": "manual-snap", "snaptime": 1700000000}, // not bulwark; filter
 				{"name": "bulwark-sonarr-20260516T100000Z", "snaptime": 1747396800},
 				{"name": "bulwark-jellyfin-20260516T110000Z", "snaptime": 1747400400},
@@ -205,8 +205,8 @@ func TestProxmox_List_FiltersAndParses(t *testing.T) {
 
 func TestProxmox_Available_2xxOr401(t *testing.T) {
 	for name, status := range map[string]int{
-		"200 ok":         http.StatusOK,
-		"401 scoped":     http.StatusUnauthorized,
+		"200 ok":     http.StatusOK,
+		"401 scoped": http.StatusUnauthorized,
 	} {
 		t.Run(name, func(t *testing.T) {
 			fake := newProxmoxFake()
@@ -224,11 +224,11 @@ func TestProxmox_Available_2xxOr401(t *testing.T) {
 func TestProxmox_Available_NetworkError(t *testing.T) {
 	// Build a backend whose URL points nowhere reachable.
 	cfg := ProxmoxConfig{
-		URL:   "http://127.0.0.1:1", // 1 is reserved; nothing listens
-		Token: "u@pve!t=s",
-		Node:  "n",
-		VMID:  1,
-		Kind:  ProxmoxKindLXC,
+		URL:        "http://127.0.0.1:1", // 1 is reserved; nothing listens
+		Token:      "u@pve!t=s",
+		Node:       "n",
+		VMID:       1,
+		Kind:       ProxmoxKindLXC,
 		HTTPClient: &http.Client{Timeout: 100 * time.Millisecond},
 	}
 	b, err := NewProxmox(cfg)

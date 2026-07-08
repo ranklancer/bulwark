@@ -202,15 +202,15 @@ func TestClassify_NoChangeReturnsHighConfidence(t *testing.T) {
 func TestPolicy_DefaultMappings(t *testing.T) {
 	p := DefaultPolicy()
 	cases := map[types.ChangeKind]types.RiskLevel{
-		types.ChangePatch:        types.RiskSafe,
-		types.ChangeMinor:        types.RiskReview,
-		types.ChangeMajor:        types.RiskBreaking,
-		types.ChangeDigest:       types.RiskSafe,
-		types.ChangeLatest:       types.RiskReview,
-		types.ChangeLSIORebuild:  types.RiskSafe,
-		types.ChangePrerelease:   types.RiskReview,
-		types.ChangeNone:         types.RiskSafe,
-		types.ChangeKind(99):     types.RiskReview, // fallback to Default
+		types.ChangePatch:       types.RiskSafe,
+		types.ChangeMinor:       types.RiskReview,
+		types.ChangeMajor:       types.RiskBreaking,
+		types.ChangeDigest:      types.RiskSafe,
+		types.ChangeLatest:      types.RiskReview,
+		types.ChangeLSIORebuild: types.RiskSafe,
+		types.ChangePrerelease:  types.RiskReview,
+		types.ChangeNone:        types.RiskSafe,
+		types.ChangeKind(99):    types.RiskReview, // fallback to Default
 	}
 	for kind, want := range cases {
 		if got := p.levelFor(kind); got != want {

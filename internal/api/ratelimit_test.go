@@ -82,7 +82,7 @@ func TestRateLimiter_GarbageCollectsStaleBuckets(t *testing.T) {
 	rl.mu.Unlock()
 
 	now = t0.Add(20 * time.Second) // 20× RefillEvery — past the GC cutoff
-	rl.Allow("persistent")          // touches persistent's bucket; triggers GC pass
+	rl.Allow("persistent")         // touches persistent's bucket; triggers GC pass
 
 	rl.mu.Lock()
 	defer rl.mu.Unlock()

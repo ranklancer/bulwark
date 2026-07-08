@@ -13,13 +13,13 @@ import (
 )
 
 type alwaysOK struct {
-	name string
+	name  string
 	calls int32
-	got  []notifier.Event
+	got   []notifier.Event
 }
 
-func (a *alwaysOK) Name() string                { return a.name }
-func (a *alwaysOK) MinLevel() types.RiskLevel   { return types.RiskBreaking } // high bar
+func (a *alwaysOK) Name() string              { return a.name }
+func (a *alwaysOK) MinLevel() types.RiskLevel { return types.RiskBreaking } // high bar
 func (a *alwaysOK) Notify(_ context.Context, e []notifier.Event) error {
 	atomic.AddInt32(&a.calls, 1)
 	a.got = append(a.got, e...)
@@ -28,8 +28,8 @@ func (a *alwaysOK) Notify(_ context.Context, e []notifier.Event) error {
 
 type alwaysFail struct{ name string }
 
-func (f *alwaysFail) Name() string                { return f.name }
-func (f *alwaysFail) MinLevel() types.RiskLevel   { return types.RiskSafe }
+func (f *alwaysFail) Name() string              { return f.name }
+func (f *alwaysFail) MinLevel() types.RiskLevel { return types.RiskSafe }
 func (f *alwaysFail) Notify(_ context.Context, _ []notifier.Event) error {
 	return errors.New("simulated failure")
 }

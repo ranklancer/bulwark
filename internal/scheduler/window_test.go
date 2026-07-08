@@ -36,12 +36,12 @@ func TestParseWindow_RejectsInvalid(t *testing.T) {
 		start, end string
 		days       []string
 	}{
-		{"25:00", "06:00", nil},   // bad hour
-		{"00:60", "06:00", nil},   // bad minute
-		{"24:30", "06:00", nil},   // 24:00 is sentinel; 24:30 invalid
+		{"25:00", "06:00", nil},                // bad hour
+		{"00:60", "06:00", nil},                // bad minute
+		{"24:30", "06:00", nil},                // 24:00 is sentinel; 24:30 invalid
 		{"02:00", "06:00", []string{"funday"}}, // bad weekday
-		{"02:00", "06", nil},      // no colon
-		{"02:00", "abc", nil},     // non-numeric
+		{"02:00", "06", nil},                   // no colon
+		{"02:00", "abc", nil},                  // non-numeric
 	}
 	for _, c := range cases {
 		if _, err := ParseWindow(c.start, c.end, c.days); err == nil {
@@ -120,8 +120,8 @@ func TestAnyActive(t *testing.T) {
 		mustParseWindow(t, "02:00", "04:00", []string{"mon", "tue", "wed", "thu", "fri"}),
 		mustParseWindow(t, "00:00", "23:59", []string{"sat", "sun"}),
 	}
-	weekday := time.Date(2026, 5, 4, 3, 0, 0, 0, time.UTC) // Mon 03:00
-	weekend := time.Date(2026, 5, 9, 14, 0, 0, 0, time.UTC) // Sat 14:00
+	weekday := time.Date(2026, 5, 4, 3, 0, 0, 0, time.UTC)     // Mon 03:00
+	weekend := time.Date(2026, 5, 9, 14, 0, 0, 0, time.UTC)    // Sat 14:00
 	weekdayOff := time.Date(2026, 5, 4, 14, 0, 0, 0, time.UTC) // Mon 14:00 — neither
 
 	if !AnyActive(weekday, wins) {

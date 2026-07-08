@@ -12,12 +12,12 @@ import (
 // matches value N.
 //
 // Supported syntax (subset of POSIX cron):
-//   *           any value
-//   N           single value
-//   N-M         inclusive range
-//   N,M,P       list of values (each part follows the same rules)
-//   */K         every K-th value starting from the field's minimum
-//   N-M/K       every K-th value in the range
+//   - any value
+//     N           single value
+//     N-M         inclusive range
+//     N,M,P       list of values (each part follows the same rules)
+//     */K         every K-th value starting from the field's minimum
+//     N-M/K       every K-th value in the range
 //
 // Predefined macros (@hourly, @daily, etc.) are not supported.
 //

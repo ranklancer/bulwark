@@ -96,16 +96,16 @@ func openQueueStore(fs *flag.FlagSet, deps queueDeps) (*store.Store, func(), err
 
 // queueRow is the merged "pending review + decisions" view used by `list`.
 type queueRow struct {
-	Container      string                 `json:"container"`
-	Image          string                 `json:"image,omitempty"`
-	Level          string                 `json:"level,omitempty"`
-	From           string                 `json:"from,omitempty"`
-	To             string                 `json:"to,omitempty"`
-	RegistryDigest string                 `json:"registry_digest,omitempty"`
-	Decision       string                 `json:"decision"`
-	DecidedBy      string                 `json:"decided_by,omitempty"`
-	DecidedAt      string                 `json:"decided_at,omitempty"`
-	Note           string                 `json:"note,omitempty"`
+	Container      string `json:"container"`
+	Image          string `json:"image,omitempty"`
+	Level          string `json:"level,omitempty"`
+	From           string `json:"from,omitempty"`
+	To             string `json:"to,omitempty"`
+	RegistryDigest string `json:"registry_digest,omitempty"`
+	Decision       string `json:"decision"`
+	DecidedBy      string `json:"decided_by,omitempty"`
+	DecidedAt      string `json:"decided_at,omitempty"`
+	Note           string `json:"note,omitempty"`
 }
 
 func cmdQueueList(args []string, stdout, stderr io.Writer, deps queueDeps) error {

@@ -14,14 +14,14 @@ import (
 )
 
 type recordingNotifier struct {
-	name string
-	min  types.RiskLevel
-	got  []notifier.Event
+	name  string
+	min   types.RiskLevel
+	got   []notifier.Event
 	calls int32
 }
 
-func (r *recordingNotifier) Name() string                { return r.name }
-func (r *recordingNotifier) MinLevel() types.RiskLevel   { return r.min }
+func (r *recordingNotifier) Name() string              { return r.name }
+func (r *recordingNotifier) MinLevel() types.RiskLevel { return r.min }
 func (r *recordingNotifier) Notify(_ context.Context, e []notifier.Event) error {
 	atomic.AddInt32(&r.calls, 1)
 	r.got = append(r.got, e...)

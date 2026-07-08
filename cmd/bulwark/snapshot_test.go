@@ -23,8 +23,8 @@ type fakeSnapshotBackend struct {
 	calls      []string
 }
 
-func (f *fakeSnapshotBackend) Name() string                         { return "fake" }
-func (f *fakeSnapshotBackend) Available(_ context.Context) bool     { return f.available }
+func (f *fakeSnapshotBackend) Name() string                     { return "fake" }
+func (f *fakeSnapshotBackend) Available(_ context.Context) bool { return f.available }
 func (f *fakeSnapshotBackend) Snapshot(_ context.Context, t, l string) (string, error) {
 	f.calls = append(f.calls, "snapshot "+t+" "+l)
 	return "id-of-" + t, nil
