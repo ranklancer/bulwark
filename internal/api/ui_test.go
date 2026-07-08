@@ -35,10 +35,19 @@ func TestUI_RootServesHTMLDashboard(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"<!DOCTYPE html>", "Bulwark", "/api/v1/queue", "/api/v1/scans"} {
-		if !strings.Contains(string(body), want) {
-			t.Errorf("dashboard missing %q", want)
-		}
+	// GET / serves the dashboard shell in whichever mode is embedded: the
+	// legacy vanilla dashboard when the React SPA has not been built
+	// (placeholder dist/), or the Vite/React index when it has. Assert only
+	// the markers common to both modes -- a valid HTML document that
+	// identifies as the Bulwark dashboard. Mode-specific bodies (the vanilla
+	// dashboard inlined /api/v1/* calls vs. the React shell hashed /assets/
+	// bundle) are covered deterministically by the mountUIRoutes tests in
+	// server_test.go.
+	if lower := strings.ToLower(string(body)); !strings.Contains(lower, "<!doctype html>") {
+		t.Errorf("dashboard missing HTML doctype; body=%q", body)
+	}
+	if !strings.Contains(string(body), "Bulwark") {
+		t.Errorf("dashboard missing product name %q", "Bulwark")
 	}
 }
 
