@@ -40,24 +40,25 @@ type ScanSummary struct {
 // package doesn't depend on scanner — that would create an import cycle as
 // soon as the scanner ever needs to talk to the store directly.
 type ScanResultRecord struct {
-	ContainerID     string           `json:"container_id"`
-	ContainerName   string           `json:"container_name"`
-	Image           string           `json:"image"`
-	ComposeProject  string           `json:"compose_project,omitempty"`
-	Skipped         bool             `json:"skipped,omitempty"`
-	SkipReason      string           `json:"skip_reason,omitempty"`
-	UpdateAvailable bool             `json:"update_available"`
-	LocalDigest     string           `json:"local_digest,omitempty"`
-	RegistryDigest  string           `json:"registry_digest,omitempty"`
-	Level           types.RiskLevel  `json:"level,omitempty"`
-	Kind            types.ChangeKind `json:"kind,omitempty"`
-	Confidence      types.Confidence `json:"confidence,omitempty"`
-	From            string           `json:"from,omitempty"`
-	To              string           `json:"to,omitempty"`
-	Rationale       string           `json:"rationale,omitempty"`
-	NotesSource     string           `json:"notes_source,omitempty"`
-	ReleaseURL      string           `json:"release_url,omitempty"`
-	Error           string           `json:"error,omitempty"`
+	ContainerID     string                    `json:"container_id"`
+	ContainerName   string                    `json:"container_name"`
+	Image           string                    `json:"image"`
+	ComposeProject  string                    `json:"compose_project,omitempty"`
+	Skipped         bool                      `json:"skipped,omitempty"`
+	SkipReason      string                    `json:"skip_reason,omitempty"`
+	UpdateAvailable bool                      `json:"update_available"`
+	LocalDigest     string                    `json:"local_digest,omitempty"`
+	RegistryDigest  string                    `json:"registry_digest,omitempty"`
+	Level           types.RiskLevel           `json:"level,omitempty"`
+	Kind            types.ChangeKind          `json:"kind,omitempty"`
+	Confidence      types.Confidence          `json:"confidence,omitempty"`
+	From            string                    `json:"from,omitempty"`
+	To              string                    `json:"to,omitempty"`
+	Rationale       string                    `json:"rationale,omitempty"`
+	NotesSource     string                    `json:"notes_source,omitempty"`
+	ReleaseURL      string                    `json:"release_url,omitempty"`
+	Security        *types.SecurityAssessment `json:"security,omitempty"`
+	Error           string                    `json:"error,omitempty"`
 }
 
 const (

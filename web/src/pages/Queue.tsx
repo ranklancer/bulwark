@@ -5,7 +5,13 @@ import { Card, CardBody, CardDescription, CardHeader, CardTitle } from "@/compon
 import { Spinner } from "@/components/ui/Spinner";
 import { TBody, TD, TH, THead, TR, Table } from "@/components/ui/Table";
 import { EventTypes, useLiveRefresh } from "@/lib/events";
-import { riskLabel, riskTone } from "@/lib/format";
+import {
+  closedCvesSummary,
+  riskLabel,
+  riskTone,
+  urgencyLabel,
+  urgencyTone,
+} from "@/lib/format";
 import { useDecide, useQueue } from "@/lib/hooks";
 import type { QueueRow } from "@/lib/types";
 
@@ -81,6 +87,7 @@ export default function Queue() {
                   <TH>Container</TH>
                   <TH>Image</TH>
                   <TH>Risk</TH>
+                  <TH>Security</TH>
                   <TH>Version</TH>
                   <TH className="text-right">Decision</TH>
                 </TR>
@@ -98,6 +105,25 @@ export default function Queue() {
                       </TD>
                       <TD>
                         <Badge tone={riskTone(row.level)}>{riskLabel(row.level)}</Badge>
+                      </TD>
+                      <TD className="text-xs">
+                        {row.security && row.security.urgency !== "none" ? (
+                          <div className="space-y-1">
+                            <Badge tone={urgencyTone(row.security.urgency)}>
+                              {urgencyLabel(row.security.urgency)}
+                            </Badge>
+                            <div
+                              className="text-muted-foreground"
+                              title={(row.security.closed ?? [])
+                                .map((c) => `${c.id} (${c.severity})`)
+                                .join("\n")}
+                            >
+                              {closedCvesSummary(row.security)}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TD>
                       <TD className="text-xs">
                         {row.from || row.to ? (

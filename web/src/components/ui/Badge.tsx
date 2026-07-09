@@ -8,7 +8,9 @@ export type BadgeTone =
   | "breaking"
   | "rolled-back"
   | "stack-skipped"
-  | "info";
+  | "info"
+  | "urgent"
+  | "recommended";
 
 interface BadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: BadgeTone;
@@ -22,6 +24,8 @@ const TONE: Record<BadgeTone, string> = {
   breaking: "bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-100",
   "rolled-back": "bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-100",
   "stack-skipped": "bg-zinc-200 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100",
+  urgent: "bg-red-600 text-white dark:bg-red-500 dark:text-white",
+  recommended: "bg-orange-100 text-orange-900 dark:bg-orange-900/40 dark:text-orange-100",
 };
 
 export function Badge({ tone = "neutral", className, ...rest }: BadgeProps) {

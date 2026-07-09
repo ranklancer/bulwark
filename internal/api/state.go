@@ -311,16 +311,17 @@ func (h *StateHandler) postScan(w http.ResponseWriter, r *http.Request) {
 
 // queueRow combines latest-scan pending updates with recorded decisions.
 type queueRow struct {
-	Container      string `json:"container"`
-	Image          string `json:"image,omitempty"`
-	Level          string `json:"level,omitempty"`
-	From           string `json:"from,omitempty"`
-	To             string `json:"to,omitempty"`
-	RegistryDigest string `json:"registry_digest,omitempty"`
-	Decision       string `json:"decision"`
-	DecidedBy      string `json:"decided_by,omitempty"`
-	DecidedAt      string `json:"decided_at,omitempty"`
-	Note           string `json:"note,omitempty"`
+	Container      string                    `json:"container"`
+	Image          string                    `json:"image,omitempty"`
+	Level          string                    `json:"level,omitempty"`
+	From           string                    `json:"from,omitempty"`
+	To             string                    `json:"to,omitempty"`
+	RegistryDigest string                    `json:"registry_digest,omitempty"`
+	Decision       string                    `json:"decision"`
+	DecidedBy      string                    `json:"decided_by,omitempty"`
+	DecidedAt      string                    `json:"decided_at,omitempty"`
+	Note           string                    `json:"note,omitempty"`
+	Security       *types.SecurityAssessment `json:"security,omitempty"`
 }
 
 func (h *StateHandler) listQueue(w http.ResponseWriter, r *http.Request) {
@@ -525,6 +526,7 @@ func buildAPIQueueRows(st *store.Store) ([]queueRow, error) {
 				To:             rr.To,
 				RegistryDigest: rr.RegistryDigest,
 				Decision:       "pending",
+				Security:       rr.Security,
 			}
 			key := store.ApprovalKey{ContainerID: rr.ContainerName, RegistryDigest: rr.RegistryDigest}
 			if dec, ok := byKey[key]; ok {
