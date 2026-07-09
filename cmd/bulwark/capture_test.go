@@ -11,6 +11,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/capture"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/store"
+	"github.com/bulwark-docker/bulwark/internal/verify"
 )
 
 func fakeResolve(digest string, isIndex bool) pinResolver {
@@ -31,7 +32,7 @@ func TestCmdCapture_DryRunProposesAndSkips(t *testing.T) {
 	}
 	digest := "sha256:" + strings.Repeat("a", 64)
 	var out, errbuf bytes.Buffer
-	if err := cmdCaptureWith([]string{"--stacks-path", dir}, &out, &errbuf, fakeResolve(digest, true)); err != nil {
+	if err := cmdCaptureWith([]string{"--stacks-path", dir}, &out, &errbuf, fakeResolve(digest, true), nil); err != nil {
 		t.Fatalf("cmdCaptureWith: %v (stderr=%s)", err, errbuf.String())
 	}
 	got := out.String()
@@ -61,7 +62,7 @@ func TestCmdCapture_ApplyWritesAndRecordsPins(t *testing.T) {
 	}
 	digest := "sha256:" + strings.Repeat("a", 64)
 	var out, errbuf bytes.Buffer
-	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--data-dir", dataDir, "--apply"}, &out, &errbuf, fakeResolve(digest, true)); err != nil {
+	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--data-dir", dataDir, "--apply"}, &out, &errbuf, fakeResolve(digest, true), nil); err != nil {
 		t.Fatalf("apply: %v (%s)", err, errbuf.String())
 	}
 	got, _ := os.ReadFile(path)
@@ -88,7 +89,7 @@ func TestCmdPin_ListAndRollback(t *testing.T) {
 	}
 	digest := "sha256:" + strings.Repeat("f", 64)
 	var out, errbuf bytes.Buffer
-	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--data-dir", dataDir, "--apply"}, &out, &errbuf, fakeResolve(digest, true)); err != nil {
+	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--data-dir", dataDir, "--apply"}, &out, &errbuf, fakeResolve(digest, true), nil); err != nil {
 		t.Fatal(err)
 	}
 	out.Reset()
@@ -105,5 +106,29 @@ func TestCmdPin_ListAndRollback(t *testing.T) {
 	got, _ := os.ReadFile(path)
 	if string(got) != orig {
 		t.Errorf("rollback did not restore original:\n got %q\nwant %q", got, orig)
+	}
+}
+
+type fakeGate struct{ v verify.Verdict }
+
+func (f fakeGate) Evaluate(_ context.Context, _ verify.Input) verify.Verdict { return f.v }
+
+func TestCmdCapture_VerifyReportsVerdict(t *testing.T) {
+	dir := t.TempDir()
+	stack := filepath.Join(dir, "web")
+	if err := os.MkdirAll(stack, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stack, "compose.yaml"), []byte("services:\n  web:\n    image: nginx:1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	gate := fakeGate{v: verify.Verdict{Decision: verify.DecisionWarn, Reasons: []string{"signature: untrusted or unsigned"}}}
+	var out, errbuf bytes.Buffer
+	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--verify"}, &out, &errbuf, fakeResolve(digest, true), gate); err != nil {
+		t.Fatalf("capture --verify: %v (%s)", err, errbuf.String())
+	}
+	if !strings.Contains(out.String(), "verify: warn") {
+		t.Errorf("expected a warn verdict reported; got:\n%s", out.String())
 	}
 }
