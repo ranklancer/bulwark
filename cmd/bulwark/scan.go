@@ -452,6 +452,7 @@ func buildScanRecord(results []scanner.Result, dispatch []notifier.DispatchResul
 			rr.To = r.Assessment.Delta.To
 			rr.Rationale = r.Assessment.Rationale
 			rr.ReleaseURL = r.Assessment.ReleaseURL
+			rr.Security = r.Assessment.Security
 			if rr.UpdateAvailable {
 				rec.Summary.Pending++
 				switch r.Assessment.Level {

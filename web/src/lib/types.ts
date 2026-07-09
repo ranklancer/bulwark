@@ -46,6 +46,25 @@ export interface ScanRecord {
 
 export type Decision = "pending" | "approved" | "rejected";
 
+export type SecurityUrgency = "none" | "recommended" | "urgent";
+
+export interface ClosedVuln {
+  id: string;
+  severity: string;
+  pkg_name?: string;
+  title?: string;
+}
+
+export interface SecurityAssessment {
+  urgency: SecurityUrgency;
+  closed_count: number;
+  critical_closed: number;
+  high_closed: number;
+  highest_severity?: string;
+  source?: string;
+  closed?: ClosedVuln[];
+}
+
 export interface QueueRow {
   container: string;
   image?: string;
@@ -57,6 +76,7 @@ export interface QueueRow {
   decided_by?: string;
   decided_at?: string;
   note?: string;
+  security?: SecurityAssessment;
 }
 
 export interface AuditEvent {

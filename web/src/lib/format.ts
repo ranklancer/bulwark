@@ -1,5 +1,5 @@
 import type { BadgeTone } from "@/components/ui/Badge";
-import type { RiskLevel } from "./types";
+import type { RiskLevel, SecurityAssessment, SecurityUrgency } from "./types";
 
 export function riskTone(level: RiskLevel | undefined): BadgeTone {
   switch (level) {
@@ -52,4 +52,37 @@ export function formatTimestamp(iso: string | undefined): string {
   if (Number.isNaN(d.getTime())) return "—";
   const pad = (n: number) => n.toString().padStart(2, "0");
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+}
+
+export function urgencyTone(u: SecurityUrgency | undefined): BadgeTone {
+  switch (u) {
+    case "urgent":
+      return "urgent";
+    case "recommended":
+      return "recommended";
+    default:
+      return "neutral";
+  }
+}
+
+export function urgencyLabel(u: SecurityUrgency | undefined): string {
+  switch (u) {
+    case "urgent":
+      return "SECURITY: URGENT";
+    case "recommended":
+      return "SECURITY: RECOMMENDED";
+    default:
+      return "—";
+  }
+}
+
+/** Compact "closes 2 CVEs (1 critical, 1 high)" summary. Empty when none. */
+export function closedCvesSummary(sec: SecurityAssessment | undefined): string {
+  if (!sec || sec.closed_count <= 0) return "";
+  const parts: string[] = [];
+  if (sec.critical_closed > 0) parts.push(`${sec.critical_closed} critical`);
+  if (sec.high_closed > 0) parts.push(`${sec.high_closed} high`);
+  const detail = parts.length ? ` (${parts.join(", ")})` : "";
+  const n = sec.closed_count;
+  return `closes ${n} CVE${n === 1 ? "" : "s"}${detail}`;
 }
