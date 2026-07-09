@@ -32,6 +32,15 @@ type pinsFile struct {
 
 const pinsSchemaVersion = 1
 
+// Canary states (the digest-pin capture design §6.2): candidate -> canary -> promoted, with
+// rolled-back as the failure terminal.
+const (
+	CanaryCandidate  = "candidate"
+	CanaryActive     = "canary"
+	CanaryPromoted   = "promoted"
+	CanaryRolledBack = "rolled-back"
+)
+
 // PinStore persists captured pins as a versioned JSON file under the data dir
 // (the digest-pin capture design §8.3). Keys are "<stack>/<service>". Writes are atomic (tmp+rename).
 // A nil-safe zero value is not valid; construct with OpenPinStore.

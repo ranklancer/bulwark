@@ -97,6 +97,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdCapture(args[1:], stdout, stderr)
 	case "pin":
 		return cmdPin(args[1:], stdout, stderr)
+	case "canary":
+		return cmdCanary(args[1:], stdout, stderr)
 	case "init":
 		return cmdInit(args[1:], stdout, stderr)
 	default:
@@ -124,6 +126,7 @@ Commands:
   run                 Run the daemon: periodic scan loop + HTTP server
   capture             Resolve multi-arch index digests and preview compose pins (dry-run)
   pin                 List captured digest pins or roll one back
+  canary              Drive a pin through candidate -> canary -> promoted (or roll back)
   queue               Inspect / approve / reject pending REVIEW updates
   audit               Tail the append-only audit log of decisions + applies
   snapshot            List / restore / prune filesystem snapshots
