@@ -93,6 +93,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdAudit(args[1:], stdout, stderr)
 	case "snapshot":
 		return cmdSnapshot(args[1:], stdout, stderr)
+	case "capture":
+		return cmdCapture(args[1:], stdout, stderr)
 	case "init":
 		return cmdInit(args[1:], stdout, stderr)
 	default:
@@ -118,6 +120,7 @@ Commands:
   history             Inspect and manage persistent scan history & dedup state
   serve               Run the HTTP server (DIUN webhook receiver) only
   run                 Run the daemon: periodic scan loop + HTTP server
+  capture             Resolve multi-arch index digests and preview compose pins (dry-run)
   queue               Inspect / approve / reject pending REVIEW updates
   audit               Tail the append-only audit log of decisions + applies
   snapshot            List / restore / prune filesystem snapshots
