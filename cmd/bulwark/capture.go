@@ -62,6 +62,7 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 	autodiscover := fs.Bool("autodiscover", true, "scan <root>/<stack>/ subdirs (flat Dockge layout)")
 	requireIndex := fs.Bool("require-index", true, "skip a ref that resolves to a single-arch (non-index) manifest")
 	apply := fs.Bool("apply", false, "apply pins in place (backup + atomic + rollback). Default: dry-run")
+	digestFlag := fs.String("digest", "", "pin to this exact sha256 digest, skipping registry resolution (single target / air-gapped)")
 	doVerify := fs.Bool("verify", false, "evaluate each captured pin through the trust gate and report the verdict (requires --config)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -151,10 +152,16 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 					fmt.Fprintf(stdout, "  - %s: skip (unparseable %q)\n", r.Service, r.Ref)
 					continue
 				}
-				pin, err := resolve(ctx, ref)
-				if err != nil {
-					fmt.Fprintf(stdout, "  - %s: resolve error: %v\n", r.Service, err)
-					continue
+				var pin capture.Pin
+				if *digestFlag != "" {
+					pin = capture.Pin{IndexDigest: *digestFlag, IsIndex: true}
+				} else {
+					p, rerr := resolve(ctx, ref)
+					if rerr != nil {
+						fmt.Fprintf(stdout, "  - %s: resolve error: %v\n", r.Service, rerr)
+						continue
+					}
+					pin = p
 				}
 				if *requireIndex && !pin.IsIndex {
 					fmt.Fprintf(stdout, "  - %s: skip (%s is single-arch; --require-index)\n", r.Service, r.Ref)

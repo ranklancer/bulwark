@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -130,5 +131,27 @@ func TestCmdCapture_VerifyReportsVerdict(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "verify: warn") {
 		t.Errorf("expected a warn verdict reported; got:\n%s", out.String())
+	}
+}
+
+func TestCmdCapture_DigestSkipsResolve(t *testing.T) {
+	dir := t.TempDir()
+	stack := filepath.Join(dir, "web")
+	if err := os.MkdirAll(stack, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(stack, "compose.yaml"), []byte("services:\n  web:\n    image: nginx:1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("c", 64)
+	failResolve := func(_ context.Context, _ registry.Reference) (capture.Pin, error) {
+		return capture.Pin{}, errors.New("resolver must not be called when --digest is set")
+	}
+	var out, eb bytes.Buffer
+	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--digest", digest}, &out, &eb, failResolve, nil); err != nil {
+		t.Fatalf("capture --digest: %v (%s)", err, eb.String())
+	}
+	if !strings.Contains(out.String(), "nginx:1.27@"+digest) {
+		t.Errorf("expected pin via --digest without a resolve call; got:\n%s", out.String())
 	}
 }
