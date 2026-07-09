@@ -105,6 +105,10 @@ services:
     volumes:
       - ./config:/config:ro          # config is read-only to the daemon
       - ./data:/data                 # persistent state (history, dedup, configstore)
+      # Bulwark runs as a non-root user baked into the image (NOT root). If you
+      # bind-mount a host dir here and hit "permission denied", chown it to the
+      # image's uid:gid — read them from the image itself:
+      #   docker run --rm --entrypoint id ghcr.io/ranklancer/bulwark:${BULWARK_VERSION} bulwark
       # Optional hooks dir (read-only); gate paths with hooks.hooks_root.
       # - ./hooks:/hooks:ro
     ports:

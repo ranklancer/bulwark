@@ -220,6 +220,69 @@ succeed without Node — but the resulting binary serves the legacy vanilla
 dashboard at `/` instead of the SPA. Run `npm run build` at least once for the
 full experience.
 
+### Docker access & storage permissions
+
+Two operational details commonly trip up a first deployment: how Bulwark
+reaches the Docker daemon, and who owns its data directory.
+
+**Reaching the Docker daemon.** `docker.host` (config) / `--docker-host` (flag)
+accepts several forms, so a socket proxy is a first-class, supported option —
+not a workaround:
+
+- *(empty)*, a path (`/var/run/docker.sock`), or `unix:///path` — a Unix socket.
+- `tcp://host:port` — a TCP endpoint, e.g. a
+  [`docker-socket-proxy`](https://github.com/Tecnativa/docker-socket-proxy).
+- `http://host` / `https://host` — an HTTP endpoint.
+
+The **recommended** pattern, shown in
+[`docker-compose.example.yaml`](docker-compose.example.yaml), places a
+read-mostly socket-proxy in front of the daemon and points Bulwark at it with
+`docker.host: tcp://socket-proxy:2375`. Only the proxy container mounts
+`/var/run/docker.sock` (read-only); Bulwark never sees the raw socket, so a
+compromised Bulwark cannot drive the daemon directly, and the proxy scopes the
+API surface (`CONTAINERS`, `IMAGES`, `POST`, …) to exactly what Bulwark needs.
+
+*Advanced — mounting the socket directly.* If you skip the proxy and bind-mount
+`/var/run/docker.sock` into the Bulwark container, the container user must be in
+the socket's owning group. Discover the group id and grant it (the Docker
+group's GID varies by distro and NAS platform, so read it rather than assuming
+`999`):
+
+```sh
+stat -c '%g' /var/run/docker.sock   # Linux; prints the Docker group's GID
+```
+
+```yaml
+services:
+  bulwark:
+    group_add:
+      - "999"   # replace with the GID printed above
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+```
+
+Direct-mount forfeits the API-surface filtering the proxy provides; prefer the
+socket-proxy pattern wherever possible.
+
+**Data directory ownership.** Unlike tools that run as root, the Bulwark image
+runs as a **non-root** `bulwark` user created at build time. `/config` is
+mounted read-only and `/data` (SQLite state, dedup, configstore) must be
+writable by that user. When you bind-mount a host directory for `/data` and hit
+a permission error, `chown` it to Bulwark's uid:gid. Read the numeric ids
+straight from the image rather than hardcoding them — they are Alpine
+system-user defaults and can shift with the base image:
+
+```sh
+docker run --rm --entrypoint id ghcr.io/ranklancer/bulwark:<tag> bulwark
+# e.g. uid=100(bulwark) gid=101(bulwark)
+chown -R 100:101 ./data             # use the ids printed above
+```
+
+Notes: a *named volume* (rather than a bind mount) is seeded from the image's
+ownership, so no manual `chown` is needed; on SELinux hosts add `:z`/`:Z` to the
+volume mount; rootless Docker and Podman remap container uids and may need no
+`chown` at all.
+
 ---
 
 ## CLI
