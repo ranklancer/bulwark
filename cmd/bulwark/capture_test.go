@@ -10,7 +10,14 @@ import (
 
 	"github.com/bulwark-docker/bulwark/internal/capture"
 	"github.com/bulwark-docker/bulwark/internal/registry"
+	"github.com/bulwark-docker/bulwark/internal/store"
 )
+
+func fakeResolve(digest string, isIndex bool) pinResolver {
+	return func(_ context.Context, _ registry.Reference) (capture.Pin, error) {
+		return capture.Pin{IndexDigest: digest, IsIndex: isIndex, MediaType: "application/vnd.oci.image.index.v1+json"}, nil
+	}
+}
 
 func TestCmdCapture_DryRunProposesAndSkips(t *testing.T) {
 	dir := t.TempDir()
@@ -23,11 +30,8 @@ func TestCmdCapture_DryRunProposesAndSkips(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest := "sha256:" + strings.Repeat("a", 64)
-	resolve := func(_ context.Context, _ registry.Reference) (capture.Pin, error) {
-		return capture.Pin{IndexDigest: digest, IsIndex: true, Arches: []string{"linux/amd64", "linux/arm64"}}, nil
-	}
 	var out, errbuf bytes.Buffer
-	if err := cmdCaptureWith([]string{"--stacks-path", dir}, &out, &errbuf, resolve); err != nil {
+	if err := cmdCaptureWith([]string{"--stacks-path", dir}, &out, &errbuf, fakeResolve(digest, true)); err != nil {
 		t.Fatalf("cmdCaptureWith: %v (stderr=%s)", err, errbuf.String())
 	}
 	got := out.String()
@@ -37,12 +41,69 @@ func TestCmdCapture_DryRunProposesAndSkips(t *testing.T) {
 	if !strings.Contains(got, "cache: skip") {
 		t.Errorf("expected redis:latest to be skipped; got:\n%s", got)
 	}
+	// Dry-run must not modify the file.
+	after, _ := os.ReadFile(filepath.Join(stack, "compose.yaml"))
+	if string(after) != compose {
+		t.Error("dry-run modified the compose file")
+	}
 }
 
-func TestCmdCapture_ApplyRefusedInPhase1(t *testing.T) {
+func TestCmdCapture_ApplyWritesAndRecordsPins(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+	stack := filepath.Join(dir, "web")
+	if err := os.MkdirAll(stack, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(stack, "compose.yaml")
+	if err := os.WriteFile(path, []byte("services:\n  web:\n    image: nginx:1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
 	var out, errbuf bytes.Buffer
-	err := cmdCaptureWith([]string{"--stacks-path", "/tmp/x", "--apply"}, &out, &errbuf, nil)
-	if err == nil || !strings.Contains(err.Error(), "Phase 2") {
-		t.Fatalf("--apply must be refused in Phase 1, got %v", err)
+	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--data-dir", dataDir, "--apply"}, &out, &errbuf, fakeResolve(digest, true)); err != nil {
+		t.Fatalf("apply: %v (%s)", err, errbuf.String())
+	}
+	got, _ := os.ReadFile(path)
+	if !strings.Contains(string(got), "nginx:1.27@"+digest) {
+		t.Errorf("compose not pinned in place:\n%s", got)
+	}
+	pins, _ := store.OpenPinStore(dataDir).List()
+	if rec, ok := pins["web/web"]; !ok || rec.IndexDigest != digest {
+		t.Errorf("pin not recorded in pins.json: %+v", pins)
+	}
+}
+
+func TestCmdPin_ListAndRollback(t *testing.T) {
+	dir := t.TempDir()
+	dataDir := t.TempDir()
+	stack := filepath.Join(dir, "web")
+	if err := os.MkdirAll(stack, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(stack, "compose.yaml")
+	orig := "services:\n  web:\n    image: nginx:1.27\n"
+	if err := os.WriteFile(path, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	digest := "sha256:" + strings.Repeat("f", 64)
+	var out, errbuf bytes.Buffer
+	if err := cmdCaptureWith([]string{"--stacks-path", dir, "--data-dir", dataDir, "--apply"}, &out, &errbuf, fakeResolve(digest, true)); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	if err := cmdPinList([]string{"--data-dir", dataDir}, &out, &errbuf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "web/web") {
+		t.Errorf("pin list missing key:\n%s", out.String())
+	}
+	out.Reset()
+	if err := cmdPinRollback([]string{"--data-dir", dataDir, "web/web"}, &out, &errbuf); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != orig {
+		t.Errorf("rollback did not restore original:\n got %q\nwant %q", got, orig)
 	}
 }

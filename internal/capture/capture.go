@@ -50,6 +50,7 @@ type Pin struct {
 	IndexDigest string   // sha256:...
 	IsIndex     bool     // whether the digest is a multi-arch index
 	Arches      []string // platforms advertised by an index
+	MediaType   string   // manifest media type (index or single-arch)
 }
 
 // Proposal is a DRY-RUN description of a single pin edit. Producing a Proposal
@@ -63,6 +64,17 @@ type Proposal struct {
 	NewValue string // image value after the pin (tag@sha256:index)
 	Diff     string // human-readable "- old / + new" snippet
 	NoOp     bool   // already pinned to this exact digest (idempotent re-run)
+}
+
+// Applied records the result of a WritePin. For file adapters BackupPath is
+// the pre-edit copy used by Rollback; NoOp means the target was already pinned.
+type Applied struct {
+	Path       string
+	BackupPath string
+	Line       int
+	OldValue   string
+	NewValue   string
+	NoOp       bool
 }
 
 // Source is the backend-agnostic capture provider. The capture and canary core
@@ -82,5 +94,5 @@ type Source interface {
 	// WritePin applies a previously-computed Proposal. File adapters edit the
 	// file in place (backup + atomic + rollback); managed adapters call the
 	// orchestrator API. Never both.
-	WritePin(ctx context.Context, p Proposal) error
+	WritePin(ctx context.Context, p Proposal) (Applied, error)
 }

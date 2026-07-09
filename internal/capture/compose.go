@@ -24,6 +24,9 @@ type ComposeSource struct {
 	// Autodiscover enables the <root>/<stack>/<compose> subdirectory scan
 	// (the flat Dockge layout).
 	Autodiscover bool
+	// BackupDir is where WritePin copies the original before an in-place edit.
+	// Empty => a .bulwark-pin-backups directory beside the compose file.
+	BackupDir string
 }
 
 var composeFileNames = []string{"compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"}
@@ -186,12 +189,6 @@ func (s *ComposeSource) ProposePin(_ context.Context, t Target, ref ImageRef, pi
 		OldValue: ref.Raw, NewValue: newVal,
 		Diff: fmt.Sprintf("- image: %s\n+ image: %s", ref.Raw, newVal),
 	}, nil
-}
-
-// WritePin is the in-place apply path with backup/atomic/rollback safety.
-// It lands in digest pinning Phase 2; Phase 1 is read/dry-run only.
-func (s *ComposeSource) WritePin(_ context.Context, _ Proposal) error {
-	return errors.New("capture: WritePin (in-place apply with backup/atomic/rollback) lands in digest pinning Phase 2")
 }
 
 // --- helpers ---------------------------------------------------------------

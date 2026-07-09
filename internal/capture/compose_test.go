@@ -112,10 +112,3 @@ func TestComposeSource_ProposePin_And_Idempotent(t *testing.T) {
 		t.Errorf("re-pin to same digest must be a no-op: %+v", prop2)
 	}
 }
-
-func TestComposeSource_WritePin_IsPhase2Stub(t *testing.T) {
-	src := &ComposeSource{}
-	if err := src.WritePin(context.Background(), Proposal{}); err == nil {
-		t.Fatal("WritePin must return a Phase-2 not-implemented error in Phase 1")
-	}
-}

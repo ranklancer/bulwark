@@ -37,6 +37,8 @@ type Config struct {
 	Logging        LoggingConfig        `yaml:"logging"`
 	Security       SecurityConfig       `yaml:"security"`
 	Verify         VerifyConfig         `yaml:"verify"`
+	Capture        CaptureConfig        `yaml:"capture"`
+	Sources        []SourceConfig       `yaml:"sources"`
 }
 
 // SecurityConfig is the opt-in CVE/security-urgency block. When Enabled is
@@ -516,6 +518,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateVerify(); err != nil {
+		return err
+	}
+	if err := c.validateCapture(); err != nil {
 		return err
 	}
 	return nil
