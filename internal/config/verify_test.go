@@ -36,14 +36,17 @@ func TestValidateVerify_DisabledIsNoop(t *testing.T) {
 	}
 }
 
-func TestValidateVerify_DefaultsToBlock(t *testing.T) {
+func TestValidateVerify_UnsetDefaultsToWarn(t *testing.T) {
+	// the design notes: an unset signature mode on a fresh enable resolves to warn
+	// (observe-only), not block. verify.enabled defaults to false, so no fleet
+	// is downgraded without an operator explicitly turning the gate on.
 	c := enabledSigConfig()
 	if err := c.validateVerify(); err != nil {
 		t.Fatalf("valid signature config must pass, got %v", err)
 	}
 	pol := c.VerifyPolicy()
-	if pol.Signature.Mode != verify.ModeBlock {
-		t.Fatalf("unset signature mode must default to block, got %s", pol.Signature.Mode)
+	if pol.Signature.Mode != verify.ModeWarn {
+		t.Fatalf("unset signature mode must default to warn (the design notes), got %s", pol.Signature.Mode)
 	}
 }
 
@@ -100,6 +103,7 @@ func TestValidateVerify_BadMode(t *testing.T) {
 
 func TestValidateVerify_CosignPinRequiredWhenSignatureActive(t *testing.T) {
 	c := enabledSigConfig()
+	c.Verify.Signature.Mode = "block"                // pin/backend validation is block-only (the design notes)
 	c.Verify.Signature.Cosign = VerifyCosignConfig{} // no version/digest
 	if err := c.validateVerify(); err == nil {
 		t.Fatal("active signature axis without a pinned cosign version+digest must be rejected (fail-closed: no ambient tooling)")
@@ -108,6 +112,7 @@ func TestValidateVerify_CosignPinRequiredWhenSignatureActive(t *testing.T) {
 
 func TestValidateVerify_CosignVersionAloneInsufficient(t *testing.T) {
 	c := enabledSigConfig()
+	c.Verify.Signature.Mode = "block"                                // pin/backend validation is block-only (the design notes)
 	c.Verify.Signature.Cosign = VerifyCosignConfig{Version: "2.4.1"} // digest missing
 	if err := c.validateVerify(); err == nil {
 		t.Fatal("version without digest must be rejected — both are required")
@@ -116,6 +121,7 @@ func TestValidateVerify_CosignVersionAloneInsufficient(t *testing.T) {
 
 func TestValidateVerify_CosignDigestMustBeSHA256Hex(t *testing.T) {
 	c := enabledSigConfig()
+	c.Verify.Signature.Mode = "block" // pin/backend validation is block-only (the design notes)
 	c.Verify.Signature.Cosign = VerifyCosignConfig{Version: "2.4.1", Digest: "not-a-real-digest"}
 	if err := c.validateVerify(); err == nil {
 		t.Fatal("a malformed digest must be rejected")
@@ -124,6 +130,7 @@ func TestValidateVerify_CosignDigestMustBeSHA256Hex(t *testing.T) {
 
 func TestValidateVerify_CosignDigestAcceptsBareHex(t *testing.T) {
 	c := enabledSigConfig()
+	c.Verify.Signature.Mode = "block" // pin/backend validation is block-only (the design notes)
 	c.Verify.Signature.Cosign = VerifyCosignConfig{Version: "2.4.1", Digest: strings.Repeat("b", 64)}
 	if err := c.validateVerify(); err != nil {
 		t.Fatalf("a bare 64-hex digest (no sha256: prefix) must be accepted, got %v", err)
@@ -132,6 +139,7 @@ func TestValidateVerify_CosignDigestAcceptsBareHex(t *testing.T) {
 
 func TestValidateVerify_SigstoreBackendRejectedAsExperimental(t *testing.T) {
 	c := enabledSigConfig()
+	c.Verify.Signature.Mode = "block" // pin/backend validation is block-only (the design notes)
 	c.Verify.Signature.Verifier = "sigstore-go"
 	if err := c.validateVerify(); err == nil {
 		t.Fatal("the sigstore-go backend is experimental and must be rejected at startup")
@@ -140,6 +148,7 @@ func TestValidateVerify_SigstoreBackendRejectedAsExperimental(t *testing.T) {
 
 func TestValidateVerify_UnknownBackendRejected(t *testing.T) {
 	c := enabledSigConfig()
+	c.Verify.Signature.Mode = "block" // pin/backend validation is block-only (the design notes)
 	c.Verify.Signature.Verifier = "notary"
 	if err := c.validateVerify(); err == nil {
 		t.Fatal("an unrecognised signature backend must be rejected")
@@ -181,5 +190,65 @@ func TestSignatureVerifier_NilWhenSignatureOff(t *testing.T) {
 	}
 	if sv != nil {
 		t.Fatal("signature-off must yield a nil verifier (the gate never calls it)")
+	}
+}
+
+func TestValidateVerify_WarnEmptyIdentitiesPasses(t *testing.T) {
+	// the design notes: warn is the observe-only state and is valid with no identities
+	// and no cosign pin — unverifiable images surface as would-block telemetry
+	// rather than failing startup.
+	c := &Config{}
+	c.Verify.Enabled = true
+	c.Verify.Signature.Mode = "warn"
+	if err := c.validateVerify(); err != nil {
+		t.Fatalf("warn with empty identities must validate, got %v", err)
+	}
+	if pol := c.VerifyPolicy(); pol.Signature.Mode != verify.ModeWarn {
+		t.Fatalf("mode must be warn, got %s", pol.Signature.Mode)
+	}
+}
+
+func TestValidateVerify_WarnPermitsMissingCosignPin(t *testing.T) {
+	c := &Config{}
+	c.Verify.Enabled = true
+	c.Verify.Signature.Mode = "warn"
+	c.Verify.Signature.Identities = []VerifyIdentityConfig{{SAN: "^https://github.com/ranklancer/.+$"}}
+	// No cosign pin configured: warn must not reject on a missing pin.
+	if err := c.validateVerify(); err != nil {
+		t.Fatalf("warn must permit a missing cosign pin, got %v", err)
+	}
+}
+
+func TestValidateVerify_BlockRequiresCosignPin(t *testing.T) {
+	c := &Config{}
+	c.Verify.Enabled = true
+	c.Verify.Signature.Mode = "block"
+	c.Verify.Signature.Identities = []VerifyIdentityConfig{{SAN: "^https://github.com/ranklancer/.+$"}}
+	// No cosign pin: block is fail-closed and must reject.
+	if err := c.validateVerify(); err == nil {
+		t.Fatal("block must require a pinned cosign version+digest")
+	}
+}
+
+// TestSignatureMode_EnforcementModeResolution pins the design notes resolution of
+// every enforcement mode: an UNSET mode resolves to warn; explicit off/warn/
+// block resolve to themselves.
+func TestSignatureMode_EnforcementModeResolution(t *testing.T) {
+	cases := []struct {
+		mode string
+		want verify.Mode
+	}{
+		{"", verify.ModeWarn}, // unset -> warn (the design notes)
+		{"off", verify.ModeOff},
+		{"warn", verify.ModeWarn},
+		{"block", verify.ModeBlock},
+	}
+	for _, tc := range cases {
+		c := &Config{}
+		c.Verify.Enabled = true
+		c.Verify.Signature.Mode = tc.mode
+		if got := c.VerifyPolicy().Signature.Mode; got != tc.want {
+			t.Errorf("mode %q -> Signature.Mode %v, want %v", tc.mode, got, tc.want)
+		}
 	}
 }

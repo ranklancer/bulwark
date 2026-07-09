@@ -20,6 +20,7 @@ const (
 	EventApplyRolledBack      = "apply.rolled_back"
 	EventApplyStackSkipped    = "apply.stack_skipped"
 	EventApplyBlocked         = "apply.blocked"
+	EventApplyWouldBlock      = "apply.would_block"
 	EventApplyBreakGlass      = "apply.break_glass"
 	EventNotificationsCleared = "notifications.cleared"
 	EventNotifierConfig       = "notifier.config_changed"

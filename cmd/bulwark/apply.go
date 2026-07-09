@@ -131,6 +131,16 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 				logger.Warn("apply: trust gate overridden by break-glass", "container", r.Container.Name, "image", r.Container.Image, "reason", reason)
 				st.Audit(store.AuditEvent{Action: store.ActionApplyBreakGlass, Container: r.Container.Name, Image: r.Container.Image, Level: r.Assessment.Level, Digest: r.RegistryDigest, Detail: detail})
 				bus.Publish(api.Event{Type: api.EventApplyBreakGlass, Container: r.Container.Name, Image: r.Container.Image, Detail: detail})
+			case verify.DecisionWarn:
+				// the design notes warn/observe: surface what WOULD block, then let the
+				// apply proceed (warn never holds). Previously this verdict was
+				// silent apart from the metric counter; now record a structured
+				// log, an audit entry and a bus event so operators can see the
+				// would-block set and progress warn -> identities -> block.
+				warnDetail := "would-block (warn mode) [" + string(verdict.Remediation()) + "]: " + verdict.Summary()
+				logger.Warn("apply: trust-gate would-block (warn mode)", "container", r.Container.Name, "image", r.Container.Image, "remediation", string(verdict.Remediation()), "reason", verdict.Summary())
+				st.Audit(store.AuditEvent{Action: store.ActionApplyWouldBlock, Container: r.Container.Name, Image: r.Container.Image, Level: r.Assessment.Level, Digest: r.RegistryDigest, Detail: warnDetail})
+				bus.Publish(api.Event{Type: api.EventApplyWouldBlock, Container: r.Container.Name, Image: r.Container.Image, Detail: warnDetail})
 			}
 		}
 		opts := updater.ApplyOptions{}

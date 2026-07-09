@@ -162,3 +162,40 @@ func TestEvaluate_BreakGlassExpired_StaysBlocked(t *testing.T) {
 		t.Fatalf("expired break-glass must stay blocked, got %s", v.Decision)
 	}
 }
+
+// TestGate_EnforcementModes_SignedVsUnsigned is the end-to-end enforcement
+// matrix: for each mode (off/warn/block) crossed with a signed vs unsigned
+// image (modelled by FakeSignatureVerifier), the gate returns the right
+// Decision. off never evaluates; warn observes (never holds); block is
+// fail-closed on an untrusted image.
+func TestGate_EnforcementModes_SignedVsUnsigned(t *testing.T) {
+	mk := func(mode Mode, verified bool) Gate {
+		return Gate{
+			Policy: Policy{Enabled: true, Signature: SignaturePolicy{
+				Mode:       mode,
+				Identities: []Identity{{SANRegexp: ".*"}},
+			}},
+			Signature: &FakeSignatureVerifier{Result: SignatureResult{Verified: verified}},
+		}
+	}
+	cases := []struct {
+		name     string
+		mode     Mode
+		verified bool
+		want     Decision
+	}{
+		{"off/unsigned proceeds", ModeOff, false, DecisionAllow},
+		{"off/signed proceeds", ModeOff, true, DecisionAllow},
+		{"warn/signed allows", ModeWarn, true, DecisionAllow},
+		{"warn/unsigned warns", ModeWarn, false, DecisionWarn},
+		{"block/signed allows", ModeBlock, true, DecisionAllow},
+		{"block/unsigned blocks", ModeBlock, false, DecisionBlock},
+	}
+	for _, tc := range cases {
+		g := mk(tc.mode, tc.verified)
+		v := g.Evaluate(context.Background(), Input{PinnedRef: "img@sha256:deadbeef"})
+		if v.Decision != tc.want {
+			t.Errorf("%s: Decision = %q, want %q (reasons: %v)", tc.name, v.Decision, tc.want, v.Reasons)
+		}
+	}
+}

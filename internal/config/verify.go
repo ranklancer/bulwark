@@ -19,9 +19,10 @@ const (
 
 // VerifyConfig is the opt-in deploy-time trust gate. When Enabled is false the
 // gate is inert and Bulwark's apply behaviour is unchanged. When true, an image
-// must clear the enabled axes before apply proceeds; the policy is fail-closed
-// (an unset signature mode defaults to block, and an axis that cannot be
-// evaluated blocks rather than passes).
+// must clear the enabled axes before apply proceeds. Within an active block
+// mode the policy is fail-closed (an axis that cannot be evaluated blocks
+// rather than passes). Per the design notes the initial signature mode on a fresh
+// enable is warn (observe-only), not block; see signatureMode.
 type VerifyConfig struct {
 	Enabled   bool                  `yaml:"enabled"`
 	Signature VerifySignatureConfig `yaml:"signature"`
@@ -30,7 +31,7 @@ type VerifyConfig struct {
 
 // VerifySignatureConfig configures cosign signature verification.
 type VerifySignatureConfig struct {
-	Mode       string                 `yaml:"mode"`     // off | warn | block (default block when enabled)
+	Mode       string                 `yaml:"mode"`     // off | warn | block (default warn on fresh enable, the design notes)
 	Verifier   string                 `yaml:"verifier"` // cosign (default) | sigstore-go (experimental, not enabled)
 	Identities []VerifyIdentityConfig `yaml:"identities"`
 	Key        string                 `yaml:"key"`    // path/ref to a public key for keyed verify
@@ -60,11 +61,16 @@ type VerifyVulnConfig struct {
 	BlockThreshold string `yaml:"block_threshold"` // off | high | critical
 }
 
-// signatureMode returns the effective signature mode, applying the fail-closed
-// default: when verify is enabled and the mode is unset, block.
+// signatureMode returns the effective signature mode. Per the design notes
+// (progressive enforcement), an UNSET mode resolves to warn: a freshly
+// enabled signature axis observes and reports would-block verdicts rather
+// than halting the fleet. Operators then progress warn -> populate trusted
+// identities -> block. An explicit "block" is honoured unchanged, and
+// verify.enabled defaults to false, so this warn default is only reachable
+// once an operator actively turns the gate on.
 func (c *Config) signatureMode() verify.Mode {
 	if strings.TrimSpace(c.Verify.Signature.Mode) == "" {
-		return verify.ModeBlock
+		return verify.ModeWarn
 	}
 	m, _ := verify.ParseMode(c.Verify.Signature.Mode)
 	return m
@@ -128,16 +134,24 @@ func (c *Config) validateVerify() error {
 
 	sigMode := c.signatureMode()
 	if sigMode != verify.ModeOff {
-		if len(c.Verify.Signature.Identities) == 0 && strings.TrimSpace(c.Verify.Signature.Key) == "" {
-			return fmt.Errorf("verify.signature requires at least one identity or a key when the signature axis is active")
-		}
+		// Any identity that IS listed must carry a SAN, in either mode.
 		for i, id := range c.Verify.Signature.Identities {
 			if strings.TrimSpace(id.SAN) == "" {
 				return fmt.Errorf("verify.signature.identities[%d].san must not be empty", i)
 			}
 		}
-		if err := c.validateSignatureVerifier(); err != nil {
-			return err
+		// block mode is fail-closed and must be fully specified: a trust
+		// anchor (identity or key) AND a pinned verifier. warn mode is the
+		// the design notes observe-only state, valid with empty identities[] and no
+		// cosign pin; unverifiable images then surface as warn/would-block
+		// telemetry instead of a startup rejection.
+		if sigMode == verify.ModeBlock {
+			if len(c.Verify.Signature.Identities) == 0 && strings.TrimSpace(c.Verify.Signature.Key) == "" {
+				return fmt.Errorf("verify.signature requires at least one identity or a key when mode is block")
+			}
+			if err := c.validateSignatureVerifier(); err != nil {
+				return err
+			}
 		}
 	}
 

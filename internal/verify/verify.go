@@ -141,3 +141,41 @@ func (v Verdict) Blocked() bool { return v.Decision == DecisionBlock }
 
 // Summary is a compact one-line rationale for the audit log and notifiers.
 func (v Verdict) Summary() string { return strings.Join(v.Reasons, "; ") }
+
+// RemediationCode is a small, closed classification of WHY a verdict failed (or
+// would fail) an axis. It is attached to warn/would-block telemetry so an
+// operator knows which action closes the gap. It is derived from the axis
+// results and carries no secrets or PII.
+type RemediationCode string
+
+const (
+	// RemediationNone means no enabled axis failed (a clean allow).
+	RemediationNone RemediationCode = ""
+	// RemediationSignatureUntrusted means the signature axis was evaluated but
+	// the image is unsigned or signed by an identity outside the trusted set:
+	// the operator should add the intended signer to identities[].
+	RemediationSignatureUntrusted RemediationCode = "signature_untrusted"
+	// RemediationVerifierUnavailable means an axis could not be evaluated at all
+	// (e.g. cosign not pinned/available in warn mode, or the vuln source errored):
+	// the gate could not reach a verdict, not that the image is known-bad.
+	RemediationVerifierUnavailable RemediationCode = "verifier_unavailable"
+	// RemediationVulnerable means the vulnerability axis found blocking CVEs.
+	RemediationVulnerable RemediationCode = "vulnerable"
+)
+
+// Remediation classifies why this verdict failed (or in warn mode WOULD fail) an
+// axis, for would-block telemetry. An unevaluable axis is reported ahead of a
+// clear untrusted/vulnerable result, and signature is reported ahead of vuln
+// when both apply. A clean/allow verdict returns RemediationNone.
+func (v Verdict) Remediation() RemediationCode {
+	if (v.Signature.Evaluated && v.Signature.Err != nil) || (v.Vuln.Evaluated && v.Vuln.Err != nil) {
+		return RemediationVerifierUnavailable
+	}
+	if v.Signature.Evaluated && !v.Signature.Verified {
+		return RemediationSignatureUntrusted
+	}
+	if v.Vuln.Evaluated && len(v.Vuln.Blocking) > 0 {
+		return RemediationVulnerable
+	}
+	return RemediationNone
+}

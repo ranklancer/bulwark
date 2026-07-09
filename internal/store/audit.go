@@ -46,6 +46,7 @@ const (
 	ActionRolledBack        = "apply.rolled_back"
 	ActionStackSkipped      = "apply.stack_skipped"
 	ActionApplyBlocked      = "apply.blocked"
+	ActionApplyWouldBlock   = "apply.would_block"
 	ActionApplyBreakGlass   = "apply.break_glass"
 	ActionScanRecorded      = "scan.recorded"
 	ActionNotifierCreated   = "notifier.created"

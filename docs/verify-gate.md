@@ -179,3 +179,35 @@ Every verdict is surfaced through existing channels:
 - P1: SLSA provenance via `cosign verify-attestation`, an external
   `GET /verify?image=...@digest` admission API for pre-reconcile checks, and a
   signed "verified digest" artifact.
+
+## 11. Progressive enforcement: the warn → block runbook (the design notes)
+
+Per [the design notes](the design notes-progressive-enforcement-signature-gate.md), a freshly
+enabled signature axis with an **unset** `verify.signature.mode` resolves to
+**`warn`**, not `block`. `verify.enabled` defaults to `false`, so this default is
+only ever reached once an operator turns the gate on; an explicit
+`mode: block` is honoured unchanged.
+
+Warn is an observe-only state: the gate performs real verification (when a
+cosign pin is available) and, for every image that *would* block, records a
+`apply.would_block` audit entry and an `apply.would_block` bus event carrying a
+remediation code (`signature_untrusted`, `verifier_unavailable`, or
+`vulnerable`) — then lets the apply proceed. Nothing is held.
+
+Recommended rollout:
+
+1. **Enable in warn.** Set `verify.enabled: true` and leave
+   `verify.signature.mode` unset (or `warn`). Optionally leave `identities[]`
+   empty and the cosign pin unset — warn validates without them.
+2. **Observe.** Over a representative window, review the `apply.would_block`
+   telemetry: the set of images that would block and, for keyless signers you
+   already trust, their observed SAN/OIDC issuer.
+3. **Populate `identities[]`.** Add the intended signers (and/or a `key`) and
+   pin cosign (`version` + `digest`). Signers are only ever *suggested* from
+   telemetry; Bulwark never auto-writes them into the trusted set.
+4. **Flip to `block`.** Set `verify.signature.mode: block` once the would-block
+   set has converged to only genuinely untrusted images. Fail-closed
+   enforcement resumes; `block` requires a trust anchor and a pinned verifier.
+
+The immediate opt-out at any point is an explicit `verify.signature.mode: block`
+(or `off`) — no code change required.
