@@ -212,7 +212,7 @@ func smtpSendFunc(useTLS bool) func(string, smtp.Auth, string, []string, []byte)
 			conn.Close()
 			return err
 		}
-		defer client.Quit()
+		defer func() { _ = client.Quit() }()
 		if auth != nil {
 			if ok, _ := client.Extension("AUTH"); ok {
 				if err := client.Auth(auth); err != nil {
