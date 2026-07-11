@@ -72,7 +72,7 @@ func ParseCron(expr string) (*CronSchedule, error) {
 	}
 
 	c := &CronSchedule{
-		minute:   uint64(min),
+		minute:   min,
 		hour:     uint32(hr),
 		dom:      uint32(dom),
 		month:    uint16(mon),

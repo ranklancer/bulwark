@@ -83,7 +83,7 @@ func (s *SlackNotifier) Notify(ctx context.Context, events []Event) error {
 func (s *SlackNotifier) payload(events []Event) map[string]any {
 	blocks := make([]map[string]any, 0, len(events)*4)
 
-	header := "Bulwark"
+	var header string
 	if len(events) == 1 {
 		header = titleFor(events[0])
 	} else {

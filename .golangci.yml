@@ -1,0 +1,54 @@
+# Bulwark golangci-lint configuration.
+#
+# Pinned to golangci-lint v1.61.0 (built with go1.22.x). The dev box bakes
+# Go 1.22.12 with GOTOOLCHAIN=local, so the linter is installed at a matching
+# pinned version — never @latest (which requires Go >= 1.23 and fails the
+# local toolchain gate). See `make lint`.
+run:
+  timeout: 5m
+  tests: true
+  go: "1.22"
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck      # unchecked errors
+    - gosimple      # code simplifications
+    - govet         # vet (superset of `go vet`)
+    - ineffassign   # ineffectual assignments
+    - staticcheck   # staticcheck analyses
+    - unconvert     # redundant type conversions
+    - bodyclose     # HTTP response bodies are closed (registry client hygiene)
+    - noctx         # HTTP requests carry a context
+    - goimports     # import grouping + formatting
+    - gofmt         # canonical formatting (mirrors `make fmt`)
+  # Parked pending ranklancer's review (each surfaces a judgment call, not a
+  # mechanical fix — see internal engineering notes "Pipeline hardening — golangci-lint
+  # adoption notes"):
+  #   - misspell : the codebase uses British English deliberately (honour,
+  #                behaviour, initialise, cancelled …). A US-locale run flags
+  #                78 intentional spellings. Re-enable only with locale: UK
+  #                after a consistency pass.
+  #   - unused   : flags genuinely dead code including an *uncalled* validator
+  #                (configstore.validateContainerOverride) and a helper in the
+  #                security-sensitive verify path — deletion is behavioural, so
+  #                it is parked rather than self-merged.
+  #   - errorlint: the single finding changes error-matching semantics
+  #                (type assertion -> errors.As) in snapshot exec handling.
+
+linters-settings:
+  gofmt:
+    simplify: true
+  goimports:
+    local-prefixes: github.com/bulwark-docker/bulwark
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    # Tests may legitimately ignore errors and skip body-close / context hygiene.
+    - path: _test\.go
+      linters:
+        - errcheck
+        - bodyclose
+        - noctx
