@@ -117,6 +117,21 @@ printf 'services:\n  svc:\n    image: ghcr.io/acme/app:3.0\n' > "$S6/svc/compose
 "$BIN" capture --stacks-path "$S6" --digest "$DIGEST" --verify --config "$VCFG6" > "$WORK/o6.txt" 2>&1
 has "$WORK/o6.txt" "verify: warn" && ok "capture --verify provenance axis warns on an unattested image" || { bad "provenance verify wiring"; cat "$WORK/o6.txt"; }
 
+# ------------------------------------------------------------------ scenario 7
+echo "== 7. reconcile: verified update queued as candidate for manual promotion =="
+D7="$WORK/d7"; mkdir -p "$D7"
+VCFG7="$WORK/verify7.yaml"
+cat > "$VCFG7" <<'Y'
+classification:
+  default_risk: review
+verify:
+  enabled: false
+Y
+"$BIN" reconcile --ref ghcr.io/acme/app:3.0 --stack web --service app --config "$VCFG7" --data-dir "$D7" --digest "$DIGEST" > "$WORK/o7.txt" 2>&1
+has "$WORK/o7.txt" "QUEUED as candidate" && ok "reconcile queues a verified update as a candidate" || { bad "reconcile queue"; cat "$WORK/o7.txt"; }
+"$BIN" canary status --data-dir "$D7" > "$WORK/o7b.txt" 2>&1
+has "$WORK/o7b.txt" "web/app" && has "$WORK/o7b.txt" "candidate" && ok "reconcile candidate is visible in canary status" || { bad "reconcile candidate not in canary status"; cat "$WORK/o7b.txt"; }
+
 echo
 echo "== smoke summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

@@ -99,6 +99,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdPin(args[1:], stdout, stderr)
 	case "canary":
 		return cmdCanary(args[1:], stdout, stderr)
+	case "reconcile":
+		return cmdReconcile(args[1:], stdout, stderr)
 	case "init":
 		return cmdInit(args[1:], stdout, stderr)
 	default:

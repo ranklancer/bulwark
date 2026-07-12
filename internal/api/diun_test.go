@@ -15,8 +15,10 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
+	"github.com/bulwark-docker/bulwark/internal/reconcile"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/store"
+	"github.com/bulwark-docker/bulwark/internal/verify"
 	"github.com/bulwark-docker/bulwark/pkg/types"
 )
 
@@ -397,5 +399,70 @@ func TestDIUN_RejectsOversizedBody(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (oversized body)", rec.Code)
+	}
+}
+
+// --- the trust engine reconcile hook -------------------------------------------------------
+
+type fakeReconciler struct {
+	got []reconcile.Update
+	out reconcile.Outcome
+}
+
+func (f *fakeReconciler) Reconcile(_ context.Context, u reconcile.Update) (reconcile.Outcome, error) {
+	f.got = append(f.got, u)
+	return f.out, nil
+}
+
+func TestDIUN_ReconcileHookInvokedOnMatch(t *testing.T) {
+	fd := &fakeDocker{
+		containers: []docker.Container{{
+			ID: "c1", Name: "sonarr",
+			Image: "lscr.io/linuxserver/sonarr:4.0.10-ls45", ImageID: "sha256:l1",
+			Labels: map[string]string{"com.docker.compose.project": "media"},
+		}},
+		images: map[string]*docker.ImageInspect{
+			"sha256:l1": {RepoDigests: []string{"lscr.io/linuxserver/sonarr@sha256:olddigest"}},
+		},
+	}
+	fr := &fakeReconciler{out: reconcile.Outcome{Queued: true, Decision: verify.DecisionAllow}}
+	h := minimalHandler(t, func(h *DIUNHandler) {
+		h.Docker = fd
+		h.Registry = &fakeRegistry{}
+		h.Reconciler = fr
+	})
+
+	resp := postJSON(h, map[string]any{
+		"status": "new",
+		"image":  "lscr.io/linuxserver/sonarr:4.0.10-ls45",
+		"digest": "sha256:newdigest",
+	})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", resp.Code, resp.Body.String())
+	}
+	if len(fr.got) != 1 {
+		t.Fatalf("reconciler invoked %d times, want 1", len(fr.got))
+	}
+	u := fr.got[0]
+	if u.Service != "sonarr" || u.Stack != "media" {
+		t.Errorf("update = %+v, want service=sonarr stack=media", u)
+	}
+	if u.Ref == "" || u.Source != "diun" {
+		t.Errorf("update ref/source = %q/%q, want non-empty ref + source=diun", u.Ref, u.Source)
+	}
+}
+
+func TestDIUN_ReconcileHookSkippedWithoutMatch(t *testing.T) {
+	fr := &fakeReconciler{}
+	h := minimalHandler(t, func(h *DIUNHandler) {
+		h.Registry = &fakeRegistry{}
+		h.Reconciler = fr
+	})
+	resp := postJSON(h, map[string]any{"status": "new", "image": "ghcr.io/acme/app:1.0", "digest": "sha256:x"})
+	if resp.Code != http.StatusOK {
+		t.Fatalf("status = %d", resp.Code)
+	}
+	if len(fr.got) != 0 {
+		t.Fatalf("reconciler must not run without a matched container, got %d calls", len(fr.got))
 	}
 }

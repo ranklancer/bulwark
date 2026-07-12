@@ -51,6 +51,8 @@ const (
 	ActionCanaryStarted     = "canary.started"
 	ActionCanaryPromoted    = "canary.promoted"
 	ActionCanaryRolledBack  = "canary.rolled_back"
+	ActionReconcileQueued   = "reconcile.queued"
+	ActionReconcileHeld     = "reconcile.held"
 	ActionScanRecorded      = "scan.recorded"
 	ActionNotifierCreated   = "notifier.created"
 	ActionNotifierUpdated   = "notifier.updated"
