@@ -143,7 +143,7 @@ func (c *Client) doManifest(ctx context.Context, method, endpoint, registry, rep
 	// Got 401 — exchange a Bearer or Basic challenge for credentials and retry once.
 	challenge := resp.Header.Get("WWW-Authenticate")
 	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	scheme, params := parseChallenge(challenge)
 	switch scheme {

@@ -57,7 +57,7 @@ func resolveSecretEnv(name string) (value string, found bool, err error) {
 	}
 
 	if hasFile {
-		raw, readErr := os.ReadFile(path)
+		raw, readErr := os.ReadFile(path) // #nosec G304 -- secret file path from the operator config
 		if readErr != nil {
 			return "", false, fmt.Errorf("config: read secret for %s from %s: %w", name, fileVar, readErr)
 		}

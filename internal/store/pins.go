@@ -78,11 +78,11 @@ func (s *PinStore) save(pf pinsFile) error {
 	if err != nil {
 		return fmt.Errorf("store: encode pins: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o750); err != nil {
 		return fmt.Errorf("store: pins dir: %w", err)
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("store: write pins tmp: %w", err)
 	}
 	if err := os.Rename(tmp, s.path); err != nil {

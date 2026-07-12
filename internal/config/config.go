@@ -384,7 +384,7 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, fmt.Errorf("config: resolve path: %w", err)
 	}
-	raw, err := os.ReadFile(abs)
+	raw, err := os.ReadFile(abs) // #nosec G304 -- config file path from the operator/CLI
 	if err != nil {
 		return nil, fmt.Errorf("config: read %s: %w", abs, err)
 	}

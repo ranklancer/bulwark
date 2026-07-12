@@ -195,7 +195,7 @@ func (s *ComposeSource) ProposePin(_ context.Context, t Target, ref ImageRef, pi
 
 func loadDotEnv(dir string) map[string]string {
 	env := map[string]string{}
-	f, err := os.Open(filepath.Join(dir, ".env"))
+	f, err := os.Open(filepath.Join(dir, ".env")) // #nosec G304 -- .env beside an operator-configured stack file
 	if err != nil {
 		return env
 	}

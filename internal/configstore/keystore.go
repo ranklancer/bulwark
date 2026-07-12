@@ -49,7 +49,7 @@ func LoadOrGenerateKey(dataDir string) ([]byte, error) {
 		return nil, errors.New("configstore: data directory is required")
 	}
 	path := filepath.Join(dataDir, KeyFileName)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- bulwark's own keystore under the data dir
 	if err == nil {
 		if len(data) != KeyLen {
 			return nil, fmt.Errorf("configstore: key file %s has wrong size (%d bytes; expected %d) — refusing to proceed", path, len(data), KeyLen)

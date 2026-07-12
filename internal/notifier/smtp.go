@@ -209,7 +209,7 @@ func smtpSendFunc(useTLS bool) func(string, smtp.Auth, string, []string, []byte)
 		}
 		client, err := smtp.NewClient(conn, host)
 		if err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return err
 		}
 		defer func() { _ = client.Quit() }()
