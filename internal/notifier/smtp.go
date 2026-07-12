@@ -203,7 +203,7 @@ func smtpSendFunc(useTLS bool) func(string, smtp.Auth, string, []string, []byte)
 		if err != nil {
 			return err
 		}
-		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host})
+		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
 		if err != nil {
 			return err
 		}
