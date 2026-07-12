@@ -42,7 +42,7 @@ func newReconciler(v verify.Verdict, resErr error) (*Reconciler, *fakeRecorder, 
 	rec := &fakeRecorder{}
 	aud := &fakeAuditor{}
 	r := &Reconciler{
-		Resolve: fakeResolver{rec: store.PinRecord{IndexDigest: "sha256:abc", MediaType: "application/vnd.oci.image.index.v1+json", Arches: []string{"amd64", "arm64"}}, err: resErr},
+		Resolve: fakeResolver{rec: store.PinRecord{IndexDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", MediaType: "application/vnd.oci.image.index.v1+json", Arches: []string{"amd64", "arm64"}}, err: resErr},
 		Gate:    fakeGate{v: v},
 		Pins:    rec,
 		Audit:   aud,
@@ -70,7 +70,7 @@ func TestReconcile_Allow_QueuesCandidate(t *testing.T) {
 	if got.CanaryState != store.CanaryCandidate {
 		t.Fatalf("canary state = %q, want candidate", got.CanaryState)
 	}
-	if got.IndexDigest != "sha256:abc" || got.Ref != "nginx:1.27" {
+	if got.IndexDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" || got.Ref != "nginx:1.27" {
 		t.Fatalf("pin = %+v, want the resolved index + ref", got)
 	}
 	if len(aud.events) != 1 || aud.events[0].Action != store.ActionReconcileQueued {
@@ -130,5 +130,18 @@ func TestReconcile_RequiresStackAndService(t *testing.T) {
 	r, _, _ := newReconciler(verify.Verdict{Decision: verify.DecisionAllow}, nil)
 	if _, err := r.Reconcile(context.Background(), Update{Ref: "nginx:1.27"}); err == nil {
 		t.Fatal("expected an error when stack/service are missing")
+	}
+}
+
+// TestReconcile_RejectsNonSHA256IndexDigest is the defense-in-depth guard for the
+// Recorder path: even if a resolver returns a non-canonical digest, the core must
+// refuse to gate or record it as a candidate pin.
+func TestReconcile_RejectsNonSHA256IndexDigest(t *testing.T) {
+	r := &Reconciler{
+		Resolve: fakeResolver{rec: store.PinRecord{IndexDigest: "sha256:abc"}}, // too short
+		Gate:    fakeGate{v: verify.Verdict{Decision: verify.DecisionAllow}},
+	}
+	if _, err := r.Reconcile(context.Background(), Update{Ref: "nginx:1.27", Stack: "s", Service: "web"}); err == nil {
+		t.Fatal("Reconcile must refuse a non-sha256 index digest before recording a candidate")
 	}
 }

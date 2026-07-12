@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bulwark-docker/bulwark/internal/registry"
 )
 
 // WritePin applies a Proposal to the compose file IN PLACE, safely (the digest-pin capture design §5.6):
@@ -27,6 +29,13 @@ func (s *ComposeSource) WritePin(_ context.Context, p Proposal) (Applied, error)
 	}
 	if p.OldValue == "" || p.NewValue == "" {
 		return res, fmt.Errorf("capture: WritePin: empty old/new image value")
+	}
+	// Host-file trust boundary: WritePin is the point where a digest actually
+	// lands in an operator's compose file. ProposePin already validates the
+	// digest, but re-assert fail-closed here so a hand-built or drifted
+	// Proposal can never splice a non-digest-pinned reference.
+	if at := strings.LastIndex(p.NewValue, "@"); at < 0 || !registry.IsSHA256Digest(p.NewValue[at+1:]) {
+		return res, fmt.Errorf("capture: WritePin refusing to splice %q — not a sha256 digest-pinned reference", p.NewValue)
 	}
 	data, err := os.ReadFile(p.Path)
 	if err != nil {

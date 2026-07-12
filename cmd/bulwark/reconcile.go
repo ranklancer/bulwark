@@ -24,8 +24,14 @@ type reconcileResolver struct {
 }
 
 func (r reconcileResolver) ResolveIndex(ctx context.Context, ref string) (store.PinRecord, error) {
-	if strings.TrimSpace(r.digest) != "" {
-		return store.PinRecord{IndexDigest: r.digest}, nil
+	if d := strings.TrimSpace(r.digest); d != "" {
+		// Operator-supplied override (air-gapped / single target): validate it
+		// is a canonical digest before trusting it as a pin — never splice raw input.
+		d = strings.ToLower(d)
+		if !registry.IsSHA256Digest(d) {
+			return store.PinRecord{}, fmt.Errorf("reconcile: --digest %q is not a canonical sha256:<64-hex> digest", r.digest)
+		}
+		return store.PinRecord{IndexDigest: d}, nil
 	}
 	parsed, err := registry.Parse(ref)
 	if err != nil {

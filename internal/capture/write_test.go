@@ -140,3 +140,21 @@ func TestRollback_RestoresByteIdentical(t *testing.T) {
 		t.Errorf("rollback not byte-identical.\n got: %q\nwant: %q", got, orig)
 	}
 }
+
+// TestWritePin_RefusesNonDigest is the host-file trust-boundary guard: a Proposal
+// whose NewValue isn't sha256 digest-pinned must be refused, and the file left
+// untouched.
+func TestWritePin_RefusesNonDigest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "compose.yaml")
+	orig := "services:\n  web:\n    image: nginx:1.27\n"
+	os.WriteFile(path, []byte(orig), 0o644)
+	p := Proposal{Path: path, Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.28"} // no @sha256:
+	if _, err := (&ComposeSource{}).WritePin(context.Background(), p); err == nil {
+		t.Fatal("WritePin must refuse a NewValue that isn't sha256 digest-pinned")
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != orig {
+		t.Error("refused write must not modify the file")
+	}
+}
