@@ -13,6 +13,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/classifier"
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
+	"github.com/bulwark-docker/bulwark/internal/reconcile"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/pkg/types"
@@ -48,6 +49,11 @@ type DIUNHandler struct {
 	Store      *store.Store
 	Logger     *slog.Logger
 
+	// Reconciler, when set, runs the trust engine reconcile (capture -> gate -> queue a
+	// candidate for manual promotion) for a detected update whose local
+	// container was matched. nil disables it (no behaviour change).
+	Reconciler ReconcileTrigger
+
 	// Token is an optional shared secret. When non-empty, requests must
 	// supply it via either an `Authorization: Bearer <token>` header or a
 	// custom `X-Bulwark-Token` header. Empty means anonymous access.
@@ -67,6 +73,11 @@ type DIUNHandler struct {
 
 	// Now is overrideable for deterministic tests; falls back to time.Now.
 	Now func() time.Time
+}
+
+// ReconcileTrigger runs the trust engine reconcile for a detected update. *reconcile.Reconciler satisfies it.
+type ReconcileTrigger interface {
+	Reconcile(ctx context.Context, u reconcile.Update) (reconcile.Outcome, error)
 }
 
 // diunPayload is the subset of DIUN's webhook body Bulwark consumes. We
@@ -289,6 +300,25 @@ func (h *DIUNHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if !anyOK && len(results) > 0 {
 			resp.Note = "all notification channels failed; not marking as delivered"
+		}
+	}
+
+	// --- the trust engine reconcile hook (optional). When a Reconciler is wired and a local
+	// container was matched (so stack + service are known), resolve the pinned
+	// index digest for the detected update, run the trust gate, and queue a
+	// verified update as a canary candidate for MANUAL promotion (an internal note).
+	// Best-effort: a reconcile error is logged but never fails the webhook.
+	if h.Reconciler != nil && matched != nil {
+		out, rerr := h.Reconciler.Reconcile(r.Context(), reconcile.Update{
+			Ref:     payload.Image,
+			Stack:   matched.ComposeProject(),
+			Service: resp.ContainerName,
+			Source:  "diun",
+		})
+		if rerr != nil {
+			logger.Warn("api: reconcile failed", "err", rerr)
+		} else {
+			logger.Info("api: reconcile", "key", out.Key, "decision", string(out.Decision), "queued", out.Queued, "held", out.Held)
 		}
 	}
 
