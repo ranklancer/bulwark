@@ -74,3 +74,25 @@ Keep the human-readable tag alongside the digest (as above) so Dependabot / a
 bump PR can still track updates. This change touches only the `Dockerfile`
 (pushable by `bulwark-ci`) and can land in the fix-forward PR if you want it now
  it was left out here to keep the security-code changes reviewable in isolation.
+
+## 4. CodeQL code scanning (token-gated SAST)
+
+`codeql.yml` runs GitHub's CodeQL (`security-extended` query suite) on Go, on
+push/PR + weekly, uploading SARIF to the repo's Security tab.
+
+```sh
+cp docs/ci/codeql.yml .github/workflows/codeql.yml && git add .github/workflows/codeql.yml && git commit -m "ci: add CodeQL code scanning" && git push   # workflow scope
+```
+
+## 5. OpenSSF Scorecard (token-gated supply-chain grader)
+
+`scorecard.yml` runs the OpenSSF Scorecard (branch protection, pinned
+dependencies, token permissions, dangerous-workflow checks, ...) weekly + on
+push, publishing the result and uploading SARIF.
+
+```sh
+cp docs/ci/scorecard.yml .github/workflows/scorecard.yml && git add .github/workflows/scorecard.yml && git commit -m "ci: add OpenSSF Scorecard" && git push   # workflow scope
+```
+
+Both need `security-events: write` (SARIF upload); Scorecard also needs
+`id-token: write` (publishing). SHA-pin the actions per §2 when you land them.
