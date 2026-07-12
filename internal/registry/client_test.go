@@ -62,7 +62,7 @@ func TestResolve_AnonymousRegistry(t *testing.T) {
 		if !strings.HasSuffix(r.URL.Path, "/v2/library/nginx/manifests/1.25") {
 			t.Errorf("unexpected path: %s", r.URL.Path)
 		}
-		w.Header().Set("Docker-Content-Digest", "sha256:fakedigest123")
+		w.Header().Set("Docker-Content-Digest", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer registry.Close()
@@ -78,7 +78,7 @@ func TestResolve_AnonymousRegistry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if digest != "sha256:fakedigest123" {
+	if digest != "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" {
 		t.Errorf("digest = %q", digest)
 	}
 }
@@ -119,7 +119,7 @@ func TestResolve_BearerChallenge(t *testing.T) {
 		if auth != "Bearer abc.def.ghi" {
 			t.Errorf("retry missing/wrong Authorization: %q", auth)
 		}
-		w.Header().Set("Docker-Content-Digest", "sha256:authedDigest")
+		w.Header().Set("Docker-Content-Digest", "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc")
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -134,7 +134,7 @@ func TestResolve_BearerChallenge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if digest != "sha256:authedDigest" {
+	if digest != "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" {
 		t.Errorf("digest = %q", digest)
 	}
 	if atomic.LoadInt32(&manifestRequests) != 2 {
@@ -159,12 +159,12 @@ func TestResolve_PinnedDigestSkipsNetwork(t *testing.T) {
 	got, err := c.Resolve(context.Background(), Reference{
 		Registry:   "registry.example.com",
 		Repository: "library/nginx",
-		Digest:     "sha256:pinned",
+		Digest:     "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
 	})
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if got != "sha256:pinned" {
+	if got != "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" {
 		t.Errorf("digest = %q", got)
 	}
 }

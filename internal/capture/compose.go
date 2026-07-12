@@ -175,6 +175,11 @@ func (s *ComposeSource) ProposePin(_ context.Context, t Target, ref ImageRef, pi
 	if pin.IndexDigest == "" {
 		return Proposal{}, errors.New("capture: empty pin digest")
 	}
+	// Defensive fail-closed: never splice anything but a canonical sha256 digest
+	// into a host compose file, even if an upstream resolver were compromised.
+	if !registry.IsSHA256Digest(pin.IndexDigest) {
+		return Proposal{}, fmt.Errorf("capture: refusing to splice a malformed digest %q into %s/%s", pin.IndexDigest, t.Name, ref.Service)
+	}
 	base := ref.Raw
 	if at := strings.Index(base, "@sha256:"); at >= 0 {
 		if base[at+1:] == pin.IndexDigest {

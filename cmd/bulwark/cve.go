@@ -1,6 +1,7 @@
 package main
 
 import (
+	"log/slog"
 	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/config"
@@ -46,6 +47,7 @@ func buildCVESource(cfg *config.Config) (cve.Source, cve.Severity) {
 
 	src, err := cve.NewScanSource(cve.ScanSourceSpec{Provider: provider, ReportDir: reportDir, ServerURL: serverURL})
 	if err != nil {
+		slog.Warn("cve: scan source unavailable; vulnerability axis disabled", "provider", provider, "err", err)
 		return nil, threshold
 	}
 	return src, threshold

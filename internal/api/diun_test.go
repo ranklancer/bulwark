@@ -466,3 +466,16 @@ func TestDIUN_ReconcileHookSkippedWithoutMatch(t *testing.T) {
 		t.Fatalf("reconciler must not run without a matched container, got %d calls", len(fr.got))
 	}
 }
+
+// item 2: a reconcile-enabled webhook must refuse to start unauthenticated.
+func TestDIUN_ValidateReconcileAuth(t *testing.T) {
+	if err := (&DIUNHandler{}).ValidateReconcileAuth(); err != nil {
+		t.Fatalf("no reconciler must be ok, got %v", err)
+	}
+	if err := (&DIUNHandler{Reconciler: &fakeReconciler{}}).ValidateReconcileAuth(); err == nil {
+		t.Fatal("expected an error: reconcile enabled but unauthenticated")
+	}
+	if err := (&DIUNHandler{Reconciler: &fakeReconciler{}, Token: "secret"}).ValidateReconcileAuth(); err != nil {
+		t.Fatalf("token should satisfy reconcile auth, got %v", err)
+	}
+}

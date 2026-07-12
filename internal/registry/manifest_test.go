@@ -2,6 +2,8 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -20,11 +22,17 @@ func manifestServer(t *testing.T, digest, contentType, body string) *httptest.Se
 	return httptest.NewServer(mux)
 }
 
+// digestOf returns the canonical content digest of body, matching what a
+// spec-compliant registry sets in Docker-Content-Digest.
+func digestOf(body string) string {
+	sum := sha256.Sum256([]byte(body))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // TestResolveManifest_MultiArchIndex is the NPM 2.15.1 regression guard: a
 // multi-arch tag must resolve to the INDEX digest with every real platform
 // enumerated — never a per-arch sub-manifest digest.
 func TestResolveManifest_MultiArchIndex(t *testing.T) {
-	const indexDigest = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	body := `{
   "schemaVersion": 2,
   "mediaType": "application/vnd.oci.image.index.v1+json",
@@ -34,6 +42,7 @@ func TestResolveManifest_MultiArchIndex(t *testing.T) {
     {"digest":"sha256:ccc","platform":{"os":"unknown","architecture":"unknown"}}
   ]
 }`
+	indexDigest := digestOf(body)
 	srv := manifestServer(t, indexDigest, "application/vnd.oci.image.index.v1+json", body)
 	defer srv.Close()
 	c := New()
@@ -54,8 +63,8 @@ func TestResolveManifest_MultiArchIndex(t *testing.T) {
 }
 
 func TestResolveManifest_SingleArch(t *testing.T) {
-	const d = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 	body := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","config":{},"layers":[]}`
+	d := digestOf(body)
 	srv := manifestServer(t, d, "application/vnd.oci.image.manifest.v1+json", body)
 	defer srv.Close()
 	c := New()
@@ -77,8 +86,8 @@ func TestResolveManifest_SingleArch(t *testing.T) {
 
 func TestResolveManifest_MediaTypeFallsBackToContentType(t *testing.T) {
 	// Body omits mediaType; the client must fall back to the Content-Type header.
-	const d = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
 	body := `{"schemaVersion":2,"manifests":[{"platform":{"os":"linux","architecture":"amd64"}}]}`
+	d := digestOf(body)
 	srv := manifestServer(t, d, "application/vnd.docker.distribution.manifest.list.v2+json; charset=utf-8", body)
 	defer srv.Close()
 	c := New()
@@ -96,5 +105,45 @@ func TestResolveManifest_RequiresTagOrDigest(t *testing.T) {
 	c := New()
 	if _, err := c.ResolveManifest(context.Background(), Reference{Registry: "x", Repository: "y"}); err == nil {
 		t.Fatal("want error when neither tag nor digest is provided")
+	}
+}
+
+// TestResolveManifest_DigestMismatch_Rejected is the pin-poisoning guard: a
+// registry (or MITM) that serves one body while claiming a DIFFERENT digest in
+// Docker-Content-Digest must be rejected fail-closed.
+func TestResolveManifest_DigestMismatch_Rejected(t *testing.T) {
+	body := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[{"platform":{"os":"linux","architecture":"amd64"}}]}`
+	other := "sha256:" + hex.EncodeToString(func() []byte { s := sha256.Sum256([]byte("a different body")); return s[:] }())
+	srv := manifestServer(t, other, "application/vnd.oci.image.index.v1+json", body)
+	defer srv.Close()
+	c := New()
+	c.BaseURL = srv.URL
+	if _, err := c.ResolveManifest(context.Background(), Reference{Registry: "r.example.com", Repository: "library/demo", Tag: "1.0"}); err == nil {
+		t.Fatal("expected an error when Docker-Content-Digest != sha256(body)")
+	}
+}
+
+func TestResolveManifest_MalformedDigestHeader_Rejected(t *testing.T) {
+	body := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
+	for _, bad := range []string{"sha256:not-hex", "sha256:" + "aa", "deadbeef", digestOf(body) + "ff"} {
+		srv := manifestServer(t, bad, "application/vnd.oci.image.manifest.v1+json", body)
+		c := New()
+		c.BaseURL = srv.URL
+		if _, err := c.ResolveManifest(context.Background(), Reference{Registry: "r.example.com", Repository: "library/demo", Tag: "1.0"}); err == nil {
+			t.Errorf("expected rejection for malformed digest header %q", bad)
+		}
+		srv.Close()
+	}
+}
+
+func TestIsSHA256Digest(t *testing.T) {
+	good := "sha256:" + hex.EncodeToString(func() []byte { s := sha256.Sum256([]byte("x")); return s[:] }())
+	if !IsSHA256Digest(good) {
+		t.Errorf("IsSHA256Digest(%q) = false, want true", good)
+	}
+	for _, bad := range []string{"", "sha256:", "sha256:zz", "sha512:" + good[7:], good + "x", "SHA256:" + good[7:]} {
+		if IsSHA256Digest(bad) {
+			t.Errorf("IsSHA256Digest(%q) = true, want false", bad)
+		}
 	}
 }
