@@ -98,6 +98,25 @@ printf 'services:\n  svc:\n    image: ghcr.io/acme/app:3.0\n' > "$S5/svc/compose
 "$BIN" capture --stacks-path "$S5" --digest "$DIGEST" --verify --config "$VCFG" > "$WORK/o5.txt" 2>&1
 has "$WORK/o5.txt" "verify: allow" && ok "capture --verify reports a gate verdict (allow when verify disabled)" || { bad "verify wiring"; cat "$WORK/o5.txt"; }
 
+# ------------------------------------------------------------------ scenario 6
+echo "== 6. verify-gate provenance axis (warn => warn on an unattested image) =="
+VCFG6="$WORK/verify6.yaml"
+cat > "$VCFG6" <<'Y'
+classification:
+  default_risk: review
+verify:
+  enabled: true
+  signature:
+    mode: "off"
+  provenance:
+    mode: warn
+    builder_id: "^https://github.com/acme/.+$"
+Y
+S6="$WORK/s6"; mkdir -p "$S6/svc"
+printf 'services:\n  svc:\n    image: ghcr.io/acme/app:3.0\n' > "$S6/svc/compose.yaml"
+"$BIN" capture --stacks-path "$S6" --digest "$DIGEST" --verify --config "$VCFG6" > "$WORK/o6.txt" 2>&1
+has "$WORK/o6.txt" "verify: warn" && ok "capture --verify provenance axis warns on an unattested image" || { bad "provenance verify wiring"; cat "$WORK/o6.txt"; }
+
 echo
 echo "== smoke summary: $PASS passed, $FAIL failed =="
 [ "$FAIL" -eq 0 ]

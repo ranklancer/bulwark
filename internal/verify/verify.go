@@ -110,9 +110,10 @@ func (p VulnPolicy) enabled() bool {
 
 // Policy is the full deploy-time trust policy.
 type Policy struct {
-	Enabled   bool
-	Signature SignaturePolicy
-	Vuln      VulnPolicy
+	Enabled    bool
+	Signature  SignaturePolicy
+	Provenance ProvenancePolicy
+	Vuln       VulnPolicy
 }
 
 // VulnResult is the outcome of the vulnerability axis for one image.
@@ -127,6 +128,7 @@ type VulnResult struct {
 type Verdict struct {
 	Decision   Decision
 	Signature  SignatureResult
+	Provenance ProvenanceResult
 	Vuln       VulnResult
 	BreakGlass *BreakGlass // non-nil when a break-glass override was applied
 	Reasons    []string    // ordered, human-readable rationale
@@ -159,6 +161,10 @@ const (
 	// (e.g. cosign not pinned/available in warn mode, or the vuln source errored):
 	// the gate could not reach a verdict, not that the image is known-bad.
 	RemediationVerifierUnavailable RemediationCode = "verifier_unavailable"
+	// RemediationProvenanceUntrusted means the provenance axis was evaluated
+	// but no trusted SLSA provenance attestation from an allowed builder was
+	// found: attest the image or add the builder to the trusted set.
+	RemediationProvenanceUntrusted RemediationCode = "provenance_untrusted"
 	// RemediationVulnerable means the vulnerability axis found blocking CVEs.
 	RemediationVulnerable RemediationCode = "vulnerable"
 )
@@ -168,11 +174,14 @@ const (
 // clear untrusted/vulnerable result, and signature is reported ahead of vuln
 // when both apply. A clean/allow verdict returns RemediationNone.
 func (v Verdict) Remediation() RemediationCode {
-	if (v.Signature.Evaluated && v.Signature.Err != nil) || (v.Vuln.Evaluated && v.Vuln.Err != nil) {
+	if (v.Signature.Evaluated && v.Signature.Err != nil) || (v.Provenance.Evaluated && v.Provenance.Err != nil) || (v.Vuln.Evaluated && v.Vuln.Err != nil) {
 		return RemediationVerifierUnavailable
 	}
 	if v.Signature.Evaluated && !v.Signature.Verified {
 		return RemediationSignatureUntrusted
+	}
+	if v.Provenance.Evaluated && !v.Provenance.Verified {
+		return RemediationProvenanceUntrusted
 	}
 	if v.Vuln.Evaluated && len(v.Vuln.Blocking) > 0 {
 		return RemediationVulnerable

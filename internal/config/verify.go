@@ -24,9 +24,10 @@ const (
 // rather than passes). Per the design notes the initial signature mode on a fresh
 // enable is warn (observe-only), not block; see signatureMode.
 type VerifyConfig struct {
-	Enabled   bool                  `yaml:"enabled"`
-	Signature VerifySignatureConfig `yaml:"signature"`
-	Vuln      VerifyVulnConfig      `yaml:"vuln"`
+	Enabled    bool                   `yaml:"enabled"`
+	Signature  VerifySignatureConfig  `yaml:"signature"`
+	Provenance VerifyProvenanceConfig `yaml:"provenance"`
+	Vuln       VerifyVulnConfig       `yaml:"vuln"`
 }
 
 // VerifySignatureConfig configures cosign signature verification.
@@ -55,6 +56,20 @@ type VerifyIdentityConfig struct {
 	Issuer string `yaml:"issuer"` // OIDC issuer to pin (optional but recommended)
 }
 
+// VerifyProvenanceConfig configures the trust engine provenance/SBOM axis. It is additive
+// and opt-in: inert until the operator sets a mode or a builder_id. Once opted
+// in, an unset mode resolves to warn (the design notes, an internal note). A missing SBOM is
+// warn-only (an internal note); an empty builder_id is never auto-trusted (an internal note). The
+// axis reuses the signature axis's pinned cosign binary.
+type VerifyProvenanceConfig struct {
+	Mode           string   `yaml:"mode"`            // off | warn | block (warn on a fresh opt-in)
+	BuilderID      string   `yaml:"builder_id"`      // trusted builder identity (certificate SAN regexp)
+	Issuer         string   `yaml:"issuer"`          // optional OIDC issuer pin for the builder cert
+	SourceRepo     string   `yaml:"source_repo"`     // optional source-repo pin (reserved)
+	RequireSBOM    bool     `yaml:"require_sbom"`    // also require an SBOM attestation (warn-only if missing)
+	PredicateTypes []string `yaml:"predicate_types"` // provenance predicate types (default: slsaprovenance)
+}
+
 // VerifyVulnConfig configures the vulnerability axis, reusing the #8 CVE source.
 type VerifyVulnConfig struct {
 	Mode           string `yaml:"mode"`            // off | warn | block (default block when threshold set)
@@ -73,6 +88,24 @@ func (c *Config) signatureMode() verify.Mode {
 		return verify.ModeWarn
 	}
 	m, _ := verify.ParseMode(c.Verify.Signature.Mode)
+	return m
+}
+
+// provenanceMode returns the effective provenance-axis mode. The axis is
+// additive and opt-in: it is ModeOff until the operator sets a mode, a
+// builder_id, require_sbom, or predicate_types. Once opted in, an unset mode
+// resolves to warn (the design notes progressive enforcement, an internal note).
+func (c *Config) provenanceMode() verify.Mode {
+	pv := c.Verify.Provenance
+	modeSet := strings.TrimSpace(pv.Mode) != ""
+	configured := modeSet || strings.TrimSpace(pv.BuilderID) != "" || pv.RequireSBOM || len(pv.PredicateTypes) > 0
+	if !configured {
+		return verify.ModeOff
+	}
+	if !modeSet {
+		return verify.ModeWarn
+	}
+	m, _ := verify.ParseMode(pv.Mode)
 	return m
 }
 
@@ -126,6 +159,17 @@ func (c *Config) validateVerify() error {
 	if _, err := verify.ParseMode(c.Verify.Vuln.Mode); err != nil {
 		return fmt.Errorf("verify.vuln.mode: %w", err)
 	}
+	if _, err := verify.ParseMode(c.Verify.Provenance.Mode); err != nil {
+		return fmt.Errorf("verify.provenance.mode: %w", err)
+	}
+	// A block-mode provenance axis with a real trusted builder is fail-closed
+	// and needs the pinned cosign it shells out to. (An empty builder degrades
+	// to warn in VerifyPolicy, so it never reaches this requirement.)
+	if c.provenanceMode() == verify.ModeBlock && strings.TrimSpace(c.Verify.Provenance.BuilderID) != "" {
+		if err := validateCosignPin(c.Verify.Signature.Cosign); err != nil {
+			return fmt.Errorf("verify.provenance (block) needs a pinned cosign: %w", err)
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(c.Verify.Vuln.BlockThreshold)) {
 	case "", "off", "high", "critical":
 	default:
@@ -156,8 +200,8 @@ func (c *Config) validateVerify() error {
 	}
 
 	vulnMode, _ := c.vulnAxis()
-	if sigMode == verify.ModeOff && vulnMode == verify.ModeOff {
-		return fmt.Errorf("verify.enabled=true but neither the signature nor the vuln axis is active")
+	if sigMode == verify.ModeOff && c.provenanceMode() == verify.ModeOff && vulnMode == verify.ModeOff {
+		return fmt.Errorf("verify.enabled=true but none of the signature, provenance, or vuln axes is active")
 	}
 	return nil
 }
@@ -224,6 +268,22 @@ func (c *Config) VerifyPolicy() verify.Policy {
 		})
 	}
 	pol.Signature = sp
+	if pmode := c.provenanceMode(); pmode != verify.ModeOff {
+		builder := strings.TrimSpace(c.Verify.Provenance.BuilderID)
+		// an internal note: an empty builder set can never pass; degrade block -> warn so it
+		// never halts the fleet on an unpopulated trust set (never auto-trust).
+		if pmode == verify.ModeBlock && builder == "" {
+			pmode = verify.ModeWarn
+		}
+		pol.Provenance = verify.ProvenancePolicy{
+			Mode:             pmode,
+			BuilderIDRegexp:  builder,
+			Issuer:           strings.TrimSpace(c.Verify.Provenance.Issuer),
+			SourceRepoRegexp: strings.TrimSpace(c.Verify.Provenance.SourceRepo),
+			RequireSBOM:      c.Verify.Provenance.RequireSBOM,
+			PredicateTypes:   c.Verify.Provenance.PredicateTypes,
+		}
+	}
 	vmode, thr := c.vulnAxis()
 	pol.Vuln = verify.VulnPolicy{Mode: vmode, BlockThreshold: thr}
 	return pol
@@ -249,4 +309,19 @@ func (c *Config) SignatureVerifier() (verify.SignatureVerifier, error) {
 	default:
 		return nil, fmt.Errorf("verify.signature.verifier %q is not recognised", c.Verify.Signature.Verifier)
 	}
+}
+
+// ProvenanceVerifier builds the configured provenance verifier, or nil when the
+// provenance axis is off. It reuses the signature axis's pinned cosign binary so
+// both axes verify against the same known-good tool. Assumes validateVerify has
+// accepted the config.
+func (c *Config) ProvenanceVerifier() (verify.ProvenanceVerifier, error) {
+	if !c.Verify.Enabled || c.provenanceMode() == verify.ModeOff {
+		return nil, nil
+	}
+	return &verify.CosignProvenanceVerifier{Cosign: &verify.CosignVerifier{
+		Bin:     strings.TrimSpace(c.Verify.Signature.Cosign.Binary),
+		Version: strings.TrimSpace(c.Verify.Signature.Cosign.Version),
+		Digest:  normalizeCosignDigest(c.Verify.Signature.Cosign.Digest),
+	}}, nil
 }

@@ -45,7 +45,11 @@ func buildVerifyGate(cfg *config.Config) (*verify.Gate, error) {
 		return nil, err
 	}
 	src, _ := buildCVESource(cfg)
-	return &verify.Gate{Policy: cfg.VerifyPolicy(), Signature: sig, Vulns: src}, nil
+	prov, err := cfg.ProvenanceVerifier()
+	if err != nil {
+		return nil, err
+	}
+	return &verify.Gate{Policy: cfg.VerifyPolicy(), Signature: sig, Provenance: prov, Vulns: src}, nil
 }
 
 func cmdCapture(args []string, stdout, stderr io.Writer) error {
