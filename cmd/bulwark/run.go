@@ -20,6 +20,7 @@ import (
 	"github.com/bulwark-docker/bulwark/internal/docker"
 	"github.com/bulwark-docker/bulwark/internal/hooks"
 	"github.com/bulwark-docker/bulwark/internal/notifier"
+	"github.com/bulwark-docker/bulwark/internal/reconcile"
 	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/releasenotes"
 	"github.com/bulwark-docker/bulwark/internal/scanner"
@@ -442,6 +443,19 @@ Flags:`)
 		DedupTTL:   *dedupTTL,
 		Now:        deps.Now,
 	}
+	// the trust engine Phase 3: wire the reconcile hook into the live DIUN handler when the
+	// trust gate is active. On a matched detected update the handler resolves
+	// the pinned digest, gates it (signature + provenance + vuln), and queues a
+	// candidate for MANUAL promotion (an internal note). Inert when verify is disabled
+	// (verifyGate nil) — no behaviour change by default.
+	if verifyGate != nil && st != nil && *dataDir != "" {
+		diun.Reconciler = &reconcile.Reconciler{
+			Resolve: daemonIndexResolver{r: regClient},
+			Gate:    verifyGate,
+			Pins:    store.OpenPinStore(*dataDir),
+			Audit:   st,
+		}
+	}
 	auth, err := buildAuthenticator(loaded, *diunToken, logger)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)
@@ -483,6 +497,7 @@ Flags:`)
 
 	state := &api.StateHandler{
 		Store:            st,
+		Pins:             pinsForState(*dataDir),
 		Logger:           logger,
 		Auth:             wrappedAuth,
 		Sessions:         sessions,

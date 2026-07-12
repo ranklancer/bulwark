@@ -37,7 +37,12 @@ import (
 // requests passing through (so curl + scripts continue to work). Browser
 // cross-origin posts are rejected before they reach the handler.
 type StateHandler struct {
-	Store  *store.Store
+	Store *store.Store
+
+	// Pins, when set, powers GET /api/v1/candidates — the trust engine dashboard view
+	// of pins currently in a candidate/canary state awaiting promotion. nil
+	// omits the route.
+	Pins   *store.PinStore
 	Logger *slog.Logger
 	Auth   Authenticator
 
@@ -155,6 +160,9 @@ func (h *StateHandler) Register(mux *http.ServeMux) {
 		mux.HandleFunc("DELETE /api/v1/sessions", h.csrfProtect(h.deleteSession))
 	}
 	mux.HandleFunc("GET /api/v1/audit", h.authed(h.listAudit))
+	if h.Pins != nil {
+		mux.HandleFunc("GET /api/v1/candidates", h.authed(h.listCandidates))
+	}
 	mux.HandleFunc("GET /api/v1/containers", h.authed(h.listContainers))
 	if h.ConfigStore != nil {
 		// Per-container UI-driven overrides (snapshot_auto /
