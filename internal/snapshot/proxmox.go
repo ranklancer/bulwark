@@ -3,12 +3,15 @@ package snapshot
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -27,12 +30,24 @@ const (
 // Proxmox API base; Token is the full "user@realm!tokenid=secret"
 // string as issued by the Proxmox UI's API Tokens page.
 type ProxmoxConfig struct {
-	URL         string
-	Token       string
-	Node        string
-	VMID        int
-	Kind        ProxmoxKind
-	InsecureTLS bool
+	URL   string
+	Token string
+	Node  string
+	VMID  int
+	Kind  ProxmoxKind
+
+	// TLS trust is resolved in this order (default = SECURE):
+	//   1. InsecureSkipVerify=true -> verification disabled (dev escape
+	//      hatch; logs a warning). Takes precedence when set.
+	//   2. CAFile != "" -> trust exactly the PEM bundle at this path (the
+	//      recommended path for a private CA such as step-ca).
+	//   3. otherwise -> the host system trust store.
+	CAFile             string
+	InsecureSkipVerify bool
+
+	// Logger receives operational warnings (e.g. when TLS verification is
+	// disabled). Optional; nil silences them.
+	Logger *slog.Logger
 
 	// HTTPClient overrides the constructed *http.Client. Tests inject
 	// an httptest server's client here.
@@ -96,11 +111,13 @@ func NewProxmox(cfg ProxmoxConfig) (*ProxmoxBackend, error) {
 	}
 	cfg.Kind = kind
 	if cfg.HTTPClient == nil {
+		tlsCfg, err := proxmoxTLSConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
 		cfg.HTTPClient = &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.InsecureTLS},
-			},
+			Timeout:   30 * time.Second,
+			Transport: &http.Transport{TLSClientConfig: tlsCfg},
 		}
 	}
 	if cfg.Now == nil {
@@ -294,4 +311,34 @@ func parseProxmoxSnapshotName(name string, snaptime int64) (label string, when t
 		rest = strings.Join(parts[:len(parts)-1], "-")
 	}
 	return rest, time.Unix(snaptime, 0).UTC(), true
+}
+
+// proxmoxTLSConfig builds the client tls.Config from the trust options on
+// cfg, defaulting to the secure system trust store. Order of precedence:
+// InsecureSkipVerify (dev escape hatch, warns) > CAFile (private CA) >
+// system store. MinVersion is pinned to TLS 1.2 in every mode.
+func proxmoxTLSConfig(cfg ProxmoxConfig) (*tls.Config, error) {
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	switch {
+	case cfg.InsecureSkipVerify:
+		// Explicit, default-false operator opt-in. Never silent: warn so a
+		// misconfiguration is visible in the logs.
+		tlsCfg.InsecureSkipVerify = true // #nosec G402 -- documented, default-false operator opt-in; warns when enabled
+		if cfg.Logger != nil {
+			cfg.Logger.Warn("proxmox: TLS certificate verification is DISABLED (insecure_skip_verify=true) — do not use in production; prefer tls.ca_file for a private CA")
+		}
+	case cfg.CAFile != "":
+		pem, err := os.ReadFile(cfg.CAFile) // #nosec G304 -- operator-supplied trust anchor path from config
+		if err != nil {
+			return nil, fmt.Errorf("proxmox: read tls.ca_file %q: %w", cfg.CAFile, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("proxmox: tls.ca_file %q contained no valid PEM certificates", cfg.CAFile)
+		}
+		tlsCfg.RootCAs = pool
+	default:
+		// System trust store (RootCAs nil => host defaults).
+	}
+	return tlsCfg, nil
 }

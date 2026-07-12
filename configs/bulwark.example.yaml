@@ -96,6 +96,26 @@ snapshots:
   restic:
     repository: ""
     password_file: ""
+  # Proxmox VE API backend: snapshots the whole VM/LXC that bulwark runs in
+  # before each apply. Set `backend: proxmox` above to enable.
+  proxmox:
+    url:   ""       # e.g. https://pve.local:8006
+    token: ""       # "user@realm!tokenid=secret" — use ${ENV_VAR} substitution
+    node:  ""       # cluster node the VM/LXC runs on, e.g. pve01
+    vmid:  0        # numeric VM/LXC id to snapshot
+    kind:  qemu     # qemu (default) or lxc
+    # TLS trust for the PVE endpoint. Default (all empty) = host system trust
+    # store — correct for a public/proper CA. Precedence when set:
+    # insecure_skip_verify > ca_file > system store.
+    tls:
+      # Trust a private issuing CA (e.g. step-ca) by PEM path. Recommended
+      # way to trust a self-signed / private-CA PVE endpoint.
+      ca_file: ""
+      # Disable certificate verification entirely. Dev/escape-hatch only; the
+      # daemon logs a warning when true. Prefer ca_file. Default false.
+      insecure_skip_verify: false
+    # DEPRECATED alias for tls.insecure_skip_verify (still honoured, warns).
+    # insecure_tls: false
   retention:
     keep_last: 5
     keep_days: 30

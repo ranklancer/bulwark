@@ -174,10 +174,22 @@ type SnapshotsConfig struct {
 		// Kind is "qemu" (default) or "lxc". Determines whether the API
 		// path is /nodes/{node}/qemu/... or /nodes/{node}/lxc/...
 		Kind string `yaml:"kind"`
-		// InsecureTLS skips TLS verification of the PVE certificate.
-		// Default false; flip true for self-signed homelab installs
-		// where you can't easily add the PVE CA to the daemon's trust
-		// store.
+		// TLS configures how the PVE endpoint's certificate is trusted.
+		// Default (empty) uses the host system trust store — correct for a
+		// PVE endpoint fronted by a public/proper CA.
+		TLS struct {
+			// CAFile is a PEM bundle path to trust a private issuing CA
+			// (e.g. step-ca). The recommended way to trust a self-signed
+			// or private-CA PVE endpoint.
+			CAFile string `yaml:"ca_file"`
+			// InsecureSkipVerify disables certificate verification
+			// entirely. Default false. Dev/escape-hatch only; the daemon
+			// logs a warning when it is enabled. Prefer ca_file.
+			InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
+		} `yaml:"tls"`
+		// InsecureTLS is DEPRECATED: use tls.insecure_skip_verify. When
+		// true it is still honoured (mapped to tls.insecure_skip_verify)
+		// with a deprecation warning, for backward compatibility.
 		InsecureTLS bool `yaml:"insecure_tls"`
 	} `yaml:"proxmox"`
 	Retention struct {
