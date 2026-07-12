@@ -314,10 +314,15 @@ Flags:`)
 		if err != nil {
 			return fmt.Errorf("run: verify: %w", err)
 		}
+		provVerifier, err := loaded.ProvenanceVerifier()
+		if err != nil {
+			return fmt.Errorf("run: verify: %w", err)
+		}
 		verifyGate = &verify.Gate{
-			Policy:    loaded.VerifyPolicy(),
-			Signature: sigVerifier,
-			Vulns:     cveSource,
+			Policy:     loaded.VerifyPolicy(),
+			Signature:  sigVerifier,
+			Provenance: provVerifier,
+			Vulns:      cveSource,
 		}
 	}
 

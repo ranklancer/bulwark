@@ -11,10 +11,11 @@ import (
 // Gate is the deploy-time trust engine. It composes the signature and
 // vulnerability axes into a single Verdict for one candidate image.
 type Gate struct {
-	Policy    Policy
-	Signature SignatureVerifier // nil => signature axis cannot be evaluated
-	Vulns     cve.Source        // nil => vulnerability axis cannot be evaluated
-	Now       func() time.Time  // injectable clock; nil => time.Now
+	Policy     Policy
+	Signature  SignatureVerifier  // nil => signature axis cannot be evaluated
+	Provenance ProvenanceVerifier // nil => provenance axis cannot be evaluated
+	Vulns      cve.Source         // nil => vulnerability axis cannot be evaluated
+	Now        func() time.Time   // injectable clock; nil => time.Now
 }
 
 // Input is one image about to be applied.
@@ -67,6 +68,37 @@ func (g Gate) Evaluate(ctx context.Context, in Input) Verdict {
 			}
 		} else {
 			v.Reasons = append(v.Reasons, "signature: trusted")
+		}
+	}
+
+	// --- provenance axis (the trust engine: SLSA provenance / SBOM attestation) ---
+	if pp := g.Policy.Provenance; pp.enabled() {
+		var pr ProvenanceResult
+		if g.Provenance == nil {
+			pr = ProvenanceResult{Evaluated: true, Err: fmt.Errorf("no provenance verifier configured")}
+		} else {
+			pr = g.Provenance.VerifyProvenance(ctx, in.PinnedRef, pp)
+		}
+		v.Provenance = pr
+		if pr.Err != nil || !pr.Verified {
+			reason := "provenance: untrusted or missing attestation"
+			if pr.Err != nil {
+				reason = "provenance: unable to verify (" + pr.Err.Error() + ")"
+			}
+			v.Reasons = append(v.Reasons, reason)
+			switch pp.Mode {
+			case ModeBlock:
+				blocking = true
+			case ModeWarn:
+				warning = true
+			}
+		} else {
+			v.Reasons = append(v.Reasons, "provenance: trusted builder")
+			// SBOM is warn-only (an internal note): a required-but-absent SBOM never blocks.
+			if pp.RequireSBOM && pr.SBOMChecked && !pr.HasSBOM {
+				v.Reasons = append(v.Reasons, "provenance: SBOM attestation missing (warn-only)")
+				warning = true
+			}
 		}
 	}
 

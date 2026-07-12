@@ -361,6 +361,16 @@ verify:
       binary: "cosign"           # path to the cosign executable (default: resolve on PATH)
       version: "2.4.1"           # expected `cosign version` token
       digest: "sha256:REPLACE_WITH_64_HEX_SHA256_OF_YOUR_COSIGN_BINARY"
+  provenance:                    # the trust engine: SLSA provenance / SBOM attestation axis (opt-in, additive)
+    # Inert until you set a mode or builder_id. Once opted in, an unset mode is
+    # warn (the design notes). Reuses the cosign binary pinned under signature.cosign.
+    mode: warn                   # off | warn | block  (warn on a fresh opt-in)
+    # Trusted builder identity (certificate SAN regexp). An EMPTY builder_id is
+    # never auto-trusted: block degrades to warn until you populate it.
+    builder_id: ""               # e.g. "^https://github.com/your-org/.+$"
+    issuer: ""                   # e.g. "https://token.actions.githubusercontent.com"
+    require_sbom: false          # also look for an SBOM attestation; MISSING is warn-only
+    predicate_types: ["slsaprovenance"]
   vuln:
     mode: block                  # off | warn | block  (default: block when a threshold is set)
     block_threshold: "off"       # off | high | critical — consumes the security.cve_source reports
