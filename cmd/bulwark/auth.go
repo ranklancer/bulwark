@@ -23,6 +23,10 @@ func buildRegistryAuth(cfg *config.Config, logger *slog.Logger) registry.Authent
 	if cfg == nil {
 		return nil
 	}
+	// nil-safe: a caller (e.g. manifestClientFor) may pass no logger.
+	if logger == nil {
+		logger = slog.Default()
+	}
 	var sources []registry.Authenticator
 
 	if len(cfg.Registries.Hosts) > 0 {
