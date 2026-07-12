@@ -57,7 +57,7 @@ type SecurityConfig struct {
 
 // CVESourceConfig selects the pluggable vulnerability backend.
 type CVESourceConfig struct {
-	Type  string            `yaml:"type"` // "trivy" | "grype"
+	Type  string            `yaml:"type"` // trivy | grype (via the cve.ScanSource provider factory; docker-scout / registry are reserved extension points)
 	Trivy TrivySourceConfig `yaml:"trivy"`
 	Grype TrivySourceConfig `yaml:"grype"` // same report_dir/server_url shape
 }

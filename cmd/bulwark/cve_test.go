@@ -23,8 +23,11 @@ func TestBuildCVESource(t *testing.T) {
 	if src == nil {
 		t.Fatal("expected a TrivyDirSource")
 	}
-	if _, ok := src.(cve.TrivyDirSource); !ok {
-		t.Errorf("expected TrivyDirSource, got %T", src)
+	ss, ok := src.(cve.ScanSource)
+	if !ok {
+		t.Errorf("expected a cve.ScanSource, got %T", src)
+	} else if ss.Provider() != "trivy" || ss.Kind() != cve.ScanKindReportDir {
+		t.Errorf("provider/kind = %q/%q, want trivy/report-dir", ss.Provider(), ss.Kind())
 	}
 	if th != cve.SeverityHigh {
 		t.Errorf("threshold = %v, want high", th)
