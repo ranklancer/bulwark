@@ -208,7 +208,7 @@ func TestClient_BasicChallengeUsesAuthenticator(t *testing.T) {
 		if r.Header.Get("Authorization") != want {
 			t.Errorf("unexpected auth header: %q", r.Header.Get("Authorization"))
 		}
-		w.Header().Set("Docker-Content-Digest", "sha256:newdigest")
+		w.Header().Set("Docker-Content-Digest", "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
@@ -227,7 +227,7 @@ func TestClient_BasicChallengeUsesAuthenticator(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if digest != "sha256:newdigest" {
+	if digest != "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" {
 		t.Errorf("digest = %q", digest)
 	}
 	if calls != 2 {
@@ -277,7 +277,7 @@ func TestClient_BearerTokenRequestSendsBasicCreds(t *testing.T) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		w.Header().Set("Docker-Content-Digest", "sha256:done")
+		w.Header().Set("Docker-Content-Digest", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()

@@ -325,3 +325,18 @@ func (c *Config) ProvenanceVerifier() (verify.ProvenanceVerifier, error) {
 		Digest:  normalizeCosignDigest(c.Verify.Signature.Cosign.Digest),
 	}}, nil
 }
+
+// VerifyWarnings returns non-fatal advisories about the verify config that the
+// daemon logs at startup. Currently: the internal note provenance block->warn degrade
+// (a block-mode provenance axis with an empty builder_id can never pass, so
+// VerifyPolicy silently downgrades it to warn — surface that to the operator).
+func (c *Config) VerifyWarnings() []string {
+	if !c.Verify.Enabled {
+		return nil
+	}
+	var w []string
+	if c.provenanceMode() == verify.ModeBlock && strings.TrimSpace(c.Verify.Provenance.BuilderID) == "" {
+		w = append(w, "verify.provenance: mode=block with an empty builder_id cannot pass and was degraded to warn; populate builder_id to enforce (an internal note)")
+	}
+	return w
+}

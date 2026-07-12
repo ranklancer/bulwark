@@ -456,6 +456,17 @@ Flags:`)
 			Audit:   st,
 		}
 	}
+
+	// Fail closed: a reconcile-enabled webhook must be authenticated.
+	if err := diun.ValidateReconcileAuth(); err != nil {
+		return fmt.Errorf("run: %w", err)
+	}
+	// Surface non-fatal verify advisories (e.g. the provenance block->warn degrade).
+	if loaded != nil {
+		for _, adv := range loaded.VerifyWarnings() {
+			logger.Warn("run: verify config advisory", "detail", adv)
+		}
+	}
 	auth, err := buildAuthenticator(loaded, *diunToken, logger)
 	if err != nil {
 		return fmt.Errorf("run: %w", err)

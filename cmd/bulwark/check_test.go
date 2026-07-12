@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,10 +19,10 @@ func TestCmdCheck_EndToEnd_Patch_WithReleaseNotes(t *testing.T) {
 	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/manifests/4.0.9-ls45"):
-			w.Header().Set("Docker-Content-Digest", "sha256:current-digest")
+			w.Header().Set("Docker-Content-Digest", "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0")
 			w.WriteHeader(http.StatusOK)
 		case strings.HasSuffix(r.URL.Path, "/manifests/4.0.10-ls46"):
-			w.Header().Set("Docker-Content-Digest", "sha256:target-digest")
+			w.Header().Set("Docker-Content-Digest", "sha256:7070707070707070707070707070707070707070707070707070707070707070")
 			w.WriteHeader(http.StatusOK)
 		default:
 			t.Errorf("unexpected registry path: %s", r.URL.Path)
@@ -64,10 +66,10 @@ func TestCmdCheck_EndToEnd_Patch_WithReleaseNotes(t *testing.T) {
 	if got["kind"] != "patch" {
 		t.Errorf("kind = %v, want patch", got["kind"])
 	}
-	if got["current_digest"] != "sha256:current-digest" {
+	if got["current_digest"] != "sha256:c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0" {
 		t.Errorf("current_digest = %v", got["current_digest"])
 	}
-	if got["target_digest"] != "sha256:target-digest" {
+	if got["target_digest"] != "sha256:7070707070707070707070707070707070707070707070707070707070707070" {
 		t.Errorf("target_digest = %v", got["target_digest"])
 	}
 	if !strings.Contains(got["notes_source"].(string), "linuxserver/docker-sonarr") {
@@ -77,7 +79,7 @@ func TestCmdCheck_EndToEnd_Patch_WithReleaseNotes(t *testing.T) {
 
 func TestCmdCheck_KeywordEscalatesToBreaking(t *testing.T) {
 	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Docker-Content-Digest", "sha256:"+r.URL.Path)
+		w.Header().Set("Docker-Content-Digest", pathDigest(r.URL.Path))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer regSrv.Close()
@@ -112,7 +114,7 @@ func TestCmdCheck_KeywordEscalatesToBreaking(t *testing.T) {
 
 func TestCmdCheck_UnknownImage_NoNotesButStillClassifies(t *testing.T) {
 	regSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Docker-Content-Digest", "sha256:"+r.URL.Path)
+		w.Header().Set("Docker-Content-Digest", pathDigest(r.URL.Path))
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer regSrv.Close()
@@ -148,4 +150,9 @@ func TestCmdCheck_RequiresTwoArgs(t *testing.T) {
 	if err := cmdCheck([]string{"only-one"}, &stdout, &stderr); err == nil {
 		t.Fatal("expected error for missing positional args")
 	}
+}
+
+func pathDigest(p string) string {
+	sum := sha256.Sum256([]byte(p))
+	return "sha256:" + hex.EncodeToString(sum[:])
 }

@@ -560,8 +560,13 @@ func (c *Config) validateSecurity() error {
 	default:
 		return fmt.Errorf("security.cve_source.type %q is not supported (valid: trivy, grype)", c.Security.CVESource.Type)
 	}
-	if dir == "" && srv == "" {
-		return fmt.Errorf("security.cve_source requires report_dir (or server_url) when security.enabled=true")
+	// Server mode is not implemented yet (see cve.NewScanSource): a server_url
+	// with no report_dir would silently disable the axis. Require report_dir.
+	if dir == "" {
+		if srv != "" {
+			return fmt.Errorf("security.cve_source.%s.server_url is set but server mode is not implemented yet; provide report_dir", t)
+		}
+		return fmt.Errorf("security.cve_source requires report_dir when security.enabled=true")
 	}
 	return nil
 }

@@ -2,11 +2,15 @@ package registry
 
 import (
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 )
 
@@ -98,8 +102,20 @@ func (c *Client) ResolveManifest(ctx context.Context, ref Reference) (ManifestIn
 			info.Arches = append(info.Arches, p)
 		}
 	}
+	info.Digest = strings.ToLower(strings.TrimSpace(info.Digest))
 	if info.Digest == "" {
 		return info, fmt.Errorf("registry: response from %s missing Docker-Content-Digest header", endpoint)
+	}
+	if !IsSHA256Digest(info.Digest) {
+		return ManifestInfo{}, fmt.Errorf("registry: %s returned a malformed content digest %q", endpoint, info.Digest)
+	}
+	// Content-addressability trust check (fail-closed): the Docker-Content-Digest
+	// header MUST equal the sha256 of the exact bytes we read. Defends against a
+	// registry/MITM that serves index A while claiming digest B (pin poisoning).
+	sum := sha256.Sum256(body)
+	want := "sha256:" + hex.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(info.Digest), []byte(want)) != 1 {
+		return ManifestInfo{}, fmt.Errorf("registry: manifest digest mismatch from %s (Docker-Content-Digest != sha256(body)) — refusing to pin", endpoint)
 	}
 	return info, nil
 }
@@ -113,3 +129,11 @@ func isIndexMediaType(mt string) bool {
 		return false
 	}
 }
+
+// digestRe validates a canonical sha256 content digest.
+var digestRe = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// IsSHA256Digest reports whether s is a canonical "sha256:<64 lowercase hex>"
+// digest. Callers reject anything else fail-closed before trusting a header or
+// splicing a digest into a compose file.
+func IsSHA256Digest(s string) bool { return digestRe.MatchString(s) }

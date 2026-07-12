@@ -61,6 +61,9 @@ func New() *Client {
 func (c *Client) Resolve(ctx context.Context, ref Reference) (string, error) {
 	if ref.Tag == "" && ref.Digest != "" {
 		// Already pinned to a digest — nothing to resolve.
+		if !IsSHA256Digest(strings.ToLower(strings.TrimSpace(ref.Digest))) {
+			return "", fmt.Errorf("registry: pinned reference has a malformed digest %q", ref.Digest)
+		}
 		return ref.Digest, nil
 	}
 	if ref.Tag == "" {
@@ -75,9 +78,12 @@ func (c *Client) Resolve(ctx context.Context, ref Reference) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("registry: HEAD %s: %s", endpoint, resp.Status)
 	}
-	digest := resp.Header.Get("Docker-Content-Digest")
+	digest := strings.ToLower(strings.TrimSpace(resp.Header.Get("Docker-Content-Digest")))
 	if digest == "" {
 		return "", fmt.Errorf("registry: response from %s missing Docker-Content-Digest header", endpoint)
+	}
+	if !IsSHA256Digest(digest) {
+		return "", fmt.Errorf("registry: %s returned a malformed content digest %q", endpoint, digest)
 	}
 	return digest, nil
 }

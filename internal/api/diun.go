@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -78,6 +79,20 @@ type DIUNHandler struct {
 // ReconcileTrigger runs the trust engine reconcile for a detected update. *reconcile.Reconciler satisfies it.
 type ReconcileTrigger interface {
 	Reconcile(ctx context.Context, u reconcile.Update) (reconcile.Outcome, error)
+}
+
+// ValidateReconcileAuth fails closed when a Reconciler is wired but the webhook
+// has no authentication (neither a shared token nor HMAC). The reconcile path
+// mutates pins + the audit log and shells out to the registry/cosign, so it
+// must never be reachable anonymously. The daemon calls this at startup.
+func (h *DIUNHandler) ValidateReconcileAuth() error {
+	if h == nil || h.Reconciler == nil {
+		return nil
+	}
+	if strings.TrimSpace(h.Token) == "" && h.HMAC == nil {
+		return errors.New("api: DIUN reconcile is enabled but the webhook is unauthenticated; set diun.token or an HMAC secret")
+	}
+	return nil
 }
 
 // diunPayload is the subset of DIUN's webhook body Bulwark consumes. We
