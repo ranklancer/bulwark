@@ -450,7 +450,7 @@ Flags:`)
 	// (verifyGate nil) — no behaviour change by default.
 	if verifyGate != nil && st != nil && *dataDir != "" {
 		diun.Reconciler = &reconcile.Reconciler{
-			Resolve: daemonIndexResolver{r: regClient},
+			Resolve: reconcileResolver{client: manifestClientFor(regClient, loaded, logger), requireIndex: true}, // body-verify + require-index (same path as CLI reconcile), not HEAD-only
 			Gate:    verifyGate,
 			Pins:    store.OpenPinStore(*dataDir),
 			Audit:   st,

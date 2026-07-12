@@ -10,8 +10,10 @@ package reconcile
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/verify"
 )
@@ -98,6 +100,12 @@ func (r *Reconciler) Reconcile(ctx context.Context, u Update) (Outcome, error) {
 	}
 	if rec.IndexDigest == "" {
 		return out, fmt.Errorf("reconcile: resolver returned an empty index digest for %q", u.Ref)
+	}
+	// Defense-in-depth trust boundary: a pin is only ever a canonical sha256
+	// index digest. Refuse to gate/record anything else even if a resolver
+	// (or a compromised one) hands back a non-digest value.
+	if !registry.IsSHA256Digest(strings.ToLower(strings.TrimSpace(rec.IndexDigest))) {
+		return out, fmt.Errorf("reconcile: resolver returned a non-sha256 index digest %q for %q — refusing to record a candidate", rec.IndexDigest, u.Ref)
 	}
 	rec.Ref = u.Ref
 	rec.Service = u.Service

@@ -478,4 +478,12 @@ func TestDIUN_ValidateReconcileAuth(t *testing.T) {
 	if err := (&DIUNHandler{Reconciler: &fakeReconciler{}, Token: "secret"}).ValidateReconcileAuth(); err != nil {
 		t.Fatalf("token should satisfy reconcile auth, got %v", err)
 	}
+	// A non-nil but DISABLED HMAC (empty secret) enforces nothing -> still fail-closed.
+	if err := (&DIUNHandler{Reconciler: &fakeReconciler{}, HMAC: &HMACScheme{}}).ValidateReconcileAuth(); err == nil {
+		t.Error("a disabled (empty-secret) HMAC must not satisfy reconcile auth")
+	}
+	// An enabled HMAC satisfies it.
+	if err := (&DIUNHandler{Reconciler: &fakeReconciler{}, HMAC: NewHMACScheme([]byte("shhh"))}).ValidateReconcileAuth(); err != nil {
+		t.Errorf("enabled HMAC should satisfy reconcile auth: %v", err)
+	}
 }

@@ -89,7 +89,10 @@ func (h *DIUNHandler) ValidateReconcileAuth() error {
 	if h == nil || h.Reconciler == nil {
 		return nil
 	}
-	if strings.TrimSpace(h.Token) == "" && h.HMAC == nil {
+	// Fail-closed on a *disabled* HMAC too, not just a nil one: a non-nil
+	// HMACScheme with an empty secret enforces nothing, so treat it as "no
+	// auth". HMACScheme.Enabled() is nil-safe.
+	if strings.TrimSpace(h.Token) == "" && !h.HMAC.Enabled() {
 		return errors.New("api: DIUN reconcile is enabled but the webhook is unauthenticated; set diun.token or an HMAC secret")
 	}
 	return nil
