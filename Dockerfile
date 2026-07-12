@@ -6,8 +6,12 @@
 # for source builds without a Node toolchain; this image always
 # replaces it with a real Vite artifact.
 
-# Stage 1: Build the React dashboard.
+# Global build args — declared before the first FROM so they are in scope
+# for every FROM line (Docker ARG scoping: pre-first-FROM args are global).
 ARG NODE_VERSION=22
+ARG GO_VERSION=1.22
+
+# Stage 1: Build the React dashboard.
 FROM node:${NODE_VERSION}-alpine AS web
 WORKDIR /src
 
@@ -26,7 +30,6 @@ RUN cd web && npm run build
 # /src/internal/api/ui-react/dist/{index.html,assets/*} now ready.
 
 # Stage 2: Compile the Go binary with the real React bundle embedded.
-ARG GO_VERSION=1.22
 FROM golang:${GO_VERSION}-alpine AS go
 WORKDIR /src
 ENV CGO_ENABLED=0 GOOS=linux
