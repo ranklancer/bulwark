@@ -73,11 +73,11 @@ func (s *ComposeSource) backup(path string, data []byte) (string, error) {
 		dir = filepath.Join(filepath.Dir(path), ".bulwark-pin-backups")
 	}
 	bdir := filepath.Join(dir, stackName(path))
-	if err := os.MkdirAll(bdir, 0o755); err != nil {
+	if err := os.MkdirAll(bdir, 0o750); err != nil {
 		return "", fmt.Errorf("capture: backup dir %s: %w", bdir, err)
 	}
 	bpath := filepath.Join(bdir, time.Now().UTC().Format("20060102T150405Z")+"-"+filepath.Base(path))
-	if err := os.WriteFile(bpath, data, 0o644); err != nil {
+	if err := os.WriteFile(bpath, data, 0o600); err != nil {
 		return "", fmt.Errorf("capture: write backup %s: %w", bpath, err)
 	}
 	return bpath, nil
@@ -85,7 +85,7 @@ func (s *ComposeSource) backup(path string, data []byte) (string, error) {
 
 // Rollback restores a backup over targetPath atomically (byte-for-byte).
 func Rollback(backupPath, targetPath string) error {
-	data, err := os.ReadFile(backupPath)
+	data, err := os.ReadFile(backupPath) // #nosec G304 -- backupPath is bulwark's own backup written by WritePin, not attacker input
 	if err != nil {
 		return fmt.Errorf("capture: read backup %s: %w", backupPath, err)
 	}

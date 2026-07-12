@@ -85,7 +85,7 @@ func (s *Store) Audit(e AuditEvent) {
 		return
 	}
 	line = append(line, '\n')
-	f, err := os.OpenFile(s.auditPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(s.auditPath(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return
 	}

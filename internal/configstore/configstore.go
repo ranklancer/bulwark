@@ -48,7 +48,7 @@ func Open(dataDir string) (*Store, error) {
 	if dataDir == "" {
 		return nil, errors.New("configstore: data directory is required")
 	}
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("configstore: mkdir %s: %w", dataDir, err)
 	}
 	key, err := LoadOrGenerateKey(dataDir)

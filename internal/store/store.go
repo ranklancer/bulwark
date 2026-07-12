@@ -53,7 +53,7 @@ func Open(dataDir string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("store: resolve data dir: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(abs, "history"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(abs, "history"), 0o750); err != nil {
 		return nil, fmt.Errorf("store: create data dir: %w", err)
 	}
 	return &Store{DataDir: abs, MaxHistory: 100}, nil

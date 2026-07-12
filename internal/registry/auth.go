@@ -170,7 +170,7 @@ func (d *DockerConfigAuth) loadConfig() (dockerConfigFile, error) {
 		}
 		path = filepath.Join(home, ".docker", "config.json")
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- docker config.json path from the operator environment
 	if err != nil {
 		return dockerConfigFile{}, err
 	}
@@ -215,7 +215,7 @@ func decodeAuthEntry(e dockerConfigAuthEntry) (Credentials, bool) {
 // stdin and emits {"Username":"...","Secret":"..."} on stdout. Use
 // this as DockerConfigAuth.ResolveHelper in production.
 func execHelper(ctx context.Context, helper, host string) (Credentials, error) {
-	cmd := exec.CommandContext(ctx, "docker-credential-"+helper, "get")
+	cmd := exec.CommandContext(ctx, "docker-credential-"+helper, "get") // #nosec G204 -- helper name from operator docker config; exec argv, no shell
 	cmd.Stdin = strings.NewReader(host)
 	out, err := cmd.Output()
 	if err != nil {

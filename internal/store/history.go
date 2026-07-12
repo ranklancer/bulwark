@@ -229,7 +229,7 @@ func (s *Store) GetScan(id string) (*ScanRecord, error) {
 
 func (s *Store) readHistory(filename string) (ScanRecord, error) {
 	path := filepath.Join(s.historyDir(), filename)
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- bulwark's own history file under the data dir
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ScanRecord{}, ErrNotFound

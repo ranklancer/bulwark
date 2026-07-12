@@ -96,7 +96,7 @@ func (c *CosignVerifier) exec(ctx context.Context, args ...string) ([]byte, erro
 	}
 	cctx, cancel := context.WithTimeout(ctx, c.timeout())
 	defer cancel()
-	cmd := exec.CommandContext(cctx, c.bin(), args...)
+	cmd := exec.CommandContext(cctx, c.bin(), args...) // #nosec G204 -- cosign binary and args from config; exec argv, no shell
 	return cmd.CombinedOutput()
 }
 
@@ -105,7 +105,7 @@ func (c *CosignVerifier) readBin(path string) ([]byte, error) {
 	if c.readBinary != nil {
 		return c.readBinary(path)
 	}
-	return os.ReadFile(path)
+	return os.ReadFile(path) // #nosec G304 -- key/cert path from the operator verify config
 }
 
 // resolveBinPath returns the filesystem path of the cosign binary. An explicit
