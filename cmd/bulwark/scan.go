@@ -305,13 +305,21 @@ func buildSnapshotBackend(loaded *config.Config, cs *configstore.Store, logger *
 		// Proxmox VE API backend. Validates url/token/node/vmid up
 		// front so a misconfig produces a clear startup warning, not
 		// a runtime failure mid-apply.
+		pxCfg := loaded.Snapshots.Proxmox
+		insecureSkip := pxCfg.TLS.InsecureSkipVerify
+		if pxCfg.InsecureTLS {
+			logger.Warn("snapshots: proxmox.insecure_tls is deprecated; use proxmox.tls.insecure_skip_verify")
+			insecureSkip = true
+		}
 		px, err := snapshot.NewProxmox(snapshot.ProxmoxConfig{
-			URL:         loaded.Snapshots.Proxmox.URL,
-			Token:       loaded.Snapshots.Proxmox.Token,
-			Node:        loaded.Snapshots.Proxmox.Node,
-			VMID:        loaded.Snapshots.Proxmox.VMID,
-			Kind:        snapshot.ProxmoxKind(loaded.Snapshots.Proxmox.Kind),
-			InsecureTLS: loaded.Snapshots.Proxmox.InsecureTLS,
+			URL:                pxCfg.URL,
+			Token:              pxCfg.Token,
+			Node:               pxCfg.Node,
+			VMID:               pxCfg.VMID,
+			Kind:               snapshot.ProxmoxKind(pxCfg.Kind),
+			CAFile:             pxCfg.TLS.CAFile,
+			InsecureSkipVerify: insecureSkip,
+			Logger:             logger,
 		})
 		if err != nil {
 			logger.Warn("snapshots: proxmox misconfigured; running without snapshots", "err", err)
