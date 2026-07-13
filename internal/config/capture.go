@@ -25,6 +25,13 @@ type SourceConfig struct {
 	Paths        []string `yaml:"paths"`        // dirs / globs / compose files
 	Endpoint     string   `yaml:"endpoint"`     // managed adapters only (API URL)
 	CredsRef     string   `yaml:"creds_ref"`    // Vaultwarden item id (never an inline secret)
+
+	// Dockge (type: dockge) — Paths are stacks roots and Autodiscover enables
+	// probing well-known Dockge locations. ExtraRoots adds candidate roots
+	// (e.g. a TrueNAS ix-dockge apps path); DockgeCompose is an optional Dockge
+	// compose file whose stacks bind-mount locates the host stacks root.
+	ExtraRoots    []string `yaml:"extra_roots"`
+	DockgeCompose string   `yaml:"dockge_compose"`
 }
 
 // validateCapture checks the capture/sources block. No-op when unset.
@@ -48,6 +55,10 @@ func (c *Config) validateCapture() error {
 		case "", "compose":
 			if len(src.Paths) == 0 && !src.Autodiscover {
 				return fmt.Errorf("sources[%q]: a compose source needs paths or autodiscover: true", name)
+			}
+		case "dockge":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: a dockge source needs paths (stacks roots) or autodiscover: true", name)
 			}
 		case "portainer", "ix-apps", "komodo", "swarm":
 			return fmt.Errorf("sources[%q]: type %q is a managed backend not yet implemented (digest pinning ships the file-based compose adapter only)", name, strings.ToLower(src.Type))
