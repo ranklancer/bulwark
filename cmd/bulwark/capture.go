@@ -127,6 +127,24 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 					continue
 				}
 				sources = append(sources, &capture.PortainerSource{API: pc, EndpointID: sc.EndpointID})
+			case "komodo":
+				// Komodo authenticates with an API key + secret. Both come from the single
+				// env var named by creds_ref, formatted "key:secret"; the secret is never
+				// stored inline in config.
+				key, secret, ok := strings.Cut(strings.TrimSpace(os.Getenv(sc.CredsRef)), ":")
+				if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(secret) == "" {
+					fmt.Fprintf(stdout, "source %q: komodo creds_ref env %q must be set to \"key:secret\" - skipping\n", sc.Name, sc.CredsRef)
+					continue
+				}
+				kc, err := capture.NewKomodoClient(capture.KomodoConfig{
+					BaseURL: sc.Endpoint, APIKey: strings.TrimSpace(key), APISecret: strings.TrimSpace(secret), CAFile: sc.CAFile, InsecureSkipVerify: sc.InsecureSkipVerify,
+					AllowInsecureHTTP: sc.AllowInsecureHTTP,
+				})
+				if err != nil {
+					fmt.Fprintf(stdout, "source %q: komodo client: %v - skipping\n", sc.Name, err)
+					continue
+				}
+				sources = append(sources, &capture.KomodoSource{API: kc})
 			default:
 				fmt.Fprintf(stdout, "source %q: type %q not implemented (file-based compose only) — skipping\n", sc.Name, sc.Type)
 			}

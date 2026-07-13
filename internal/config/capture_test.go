@@ -24,9 +24,14 @@ func TestValidateCapture_RejectsManagedAndBadStyle(t *testing.T) {
 		t.Error("portainer without creds_ref must be rejected (secret must not be inline)")
 	}
 	c = base()
-	c.Sources = []SourceConfig{{Name: "k", Type: "komodo", Endpoint: "http://x"}}
+	c.Sources = []SourceConfig{{Name: "k", Type: "komodo", Endpoint: "http://x"}} // no creds_ref
 	if err := c.Validate(); err == nil {
-		t.Error("a not-yet-implemented managed backend (komodo) must be rejected")
+		t.Error("komodo without creds_ref must be rejected (secret must not be inline)")
+	}
+	c = base()
+	c.Sources = []SourceConfig{{Name: "s", Type: "swarm"}}
+	if err := c.Validate(); err == nil {
+		t.Error("a not-yet-implemented managed backend (swarm) must be rejected")
 	}
 	c = base()
 	c.Sources = []SourceConfig{{Name: "d", Type: "compose"}} // no paths, no autodiscover
@@ -52,5 +57,15 @@ func TestValidateCapture_PortainerOK(t *testing.T) {
 	c.Sources = []SourceConfig{{Name: "portainer", Type: "portainer", Endpoint: "https://portainer.example:9443", CredsRef: "PORTAINER_API_KEY"}}
 	if err := c.Validate(); err != nil {
 		t.Fatalf("a portainer source with endpoint + creds_ref must pass: %v", err)
+	}
+}
+
+func TestValidateCapture_KomodoOK(t *testing.T) {
+	c := &Config{}
+	c.Classification.DefaultRisk = "review"
+	c.Capture.ComposePinStyle = "inline"
+	c.Sources = []SourceConfig{{Name: "komodo", Type: "komodo", Endpoint: "https://komodo.example:9120", CredsRef: "KOMODO_API_CREDS"}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a komodo source with endpoint + creds_ref must pass: %v", err)
 	}
 }
