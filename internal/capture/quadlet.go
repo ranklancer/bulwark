@@ -105,14 +105,22 @@ func (s *QuadletSource) ProposePin(_ context.Context, t Target, ref ImageRef, pi
 
 // WritePin re-asserts the digest and containment guards at the write boundary,
 // then splices the new value into the Image= key and writes via the shared
-// backup + atomic path. Closes the propose->apply TOCTOU: the target must still
-// resolve inside a configured unit dir and its final component must not be a
-// symlink (O_NOFOLLOW).
+// backup + atomic path. This NARROWS the propose->apply TOCTOU window: the target
+// must still resolve inside a configured unit dir and its FINAL component must not
+// be a symlink (O_NOFOLLOW). O_NOFOLLOW covers only the final component, not an
+// intermediate-directory symlink swap (same as Dockge; not exploitable when the
+// unit roots are root-owned).
 func (s *QuadletSource) WritePin(_ context.Context, p Proposal) (Applied, error) {
 	res := Applied{Path: p.Path, Line: p.Line, OldValue: p.OldValue, NewValue: p.NewValue}
 	if p.NoOp {
 		res.NoOp = true
 		return res, nil
+	}
+	if p.Path == "" || p.Line <= 0 {
+		return res, fmt.Errorf("capture: quadlet: WritePin needs a Proposal with Path and Line (got %q line %d)", p.Path, p.Line)
+	}
+	if p.OldValue == "" || p.NewValue == "" {
+		return res, fmt.Errorf("capture: quadlet: WritePin: empty old/new image value")
 	}
 	// Write-boundary digest guard (parity with the compose/managed write paths).
 	if at := strings.LastIndex(p.NewValue, "@"); at < 0 || !registry.IsSHA256Digest(strings.ToLower(p.NewValue[at+1:])) {
@@ -236,7 +244,16 @@ func imageRefsFromQuadletBytes(data []byte, service string) ([]ImageRef, error) 
 			continue
 		}
 		ir := ImageRef{Service: service, Raw: val, Ref: val, Line: lineNo}
-		ir.Pinnable, ir.Reason = classifyRef(val)
+		// Parser/splicer must AGREE: the splicer keys on the literal "Image=" token,
+		// so a non-canonical "Image =" (whitespace around '=') is reported
+		// non-pinnable rather than silently failing to splice with a misleading
+		// "content changed" error. systemd tolerates the spaced form; bulwark asks
+		// the operator to normalize it to "Image=" before pinning.
+		if key != "Image" {
+			ir.Pinnable, ir.Reason = false, "non-canonical 'Image =' key (whitespace around '='); normalize to 'Image=' to pin"
+		} else {
+			ir.Pinnable, ir.Reason = classifyRef(val)
+		}
 		return []ImageRef{ir}, nil
 	}
 	return nil, nil

@@ -68,9 +68,12 @@ Explicit `paths` override autodetection. Nothing is hardcoded to a specific host
 - **Idempotent** — re-pinning to the same digest is a no-op.
 - **Drift-checked, fail-closed** — the target line must still be the `Image=` line
   and still contain the exact pre-pin value, else the write is refused.
-- **Write-boundary guards (TOCTOU)** — containment + `O_NOFOLLOW` are re-checked
-  at write time, so a directory component or the unit file swapped to a symlink
-  after discovery can never redirect a write outside a configured root.
+- **Write-boundary guards (TOCTOU)** — containment and `O_NOFOLLOW` are
+  re-checked at write time, narrowing the propose→apply window: `O_NOFOLLOW`
+  refuses a final-component symlink swap and the containment re-check refuses a
+  target that no longer resolves inside a root. `O_NOFOLLOW` guards only the
+  FINAL component, not an intermediate-directory symlink swap (same as Dockge);
+  that is not exploitable when the unit roots are root-owned.
 - **Digest-only** — a hand-built or drifted proposal whose new value is not a
   canonical `@sha256:` digest is refused.
 

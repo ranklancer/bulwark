@@ -167,6 +167,28 @@ func TestImageRefsFromQuadletBytes(t *testing.T) {
 	if refs != nil {
 		t.Fatalf("no-image unit should yield nil, got %+v", refs)
 	}
+	// Non-canonical "Image =" (whitespace around '=') is reported non-pinnable so
+	// parser and splicer agree (the splicer keys on the literal "Image=").
+	refs, _ = imageRefsFromQuadletBytes([]byte("[Container]\nImage = docker.io/library/nginx:1.27\n"), "web")
+	if len(refs) != 1 || refs[0].Pinnable || !strings.Contains(refs[0].Reason, "non-canonical") {
+		t.Fatalf("Image = ref must be non-pinnable: %+v", refs)
+	}
+}
+
+func TestQuadletSource_WritePinRejectsBadProposal(t *testing.T) {
+	dir := t.TempDir()
+	p := writeUnit(t, dir, "web.container", sampleContainerUnit)
+	src := &QuadletSource{UnitDirs: []string{dir}}
+	d := qdigest64("a")
+	if _, err := src.WritePin(context.Background(), Proposal{Path: p, Line: 0, OldValue: "x", NewValue: "x@" + d}); err == nil {
+		t.Fatal("Line<=0 must be rejected")
+	}
+	if _, err := src.WritePin(context.Background(), Proposal{Path: p, Line: 5, OldValue: "", NewValue: "x@" + d}); err == nil {
+		t.Fatal("empty OldValue must be rejected")
+	}
+	if _, err := src.WritePin(context.Background(), Proposal{Path: "", Line: 5, OldValue: "x", NewValue: "x@" + d}); err == nil {
+		t.Fatal("empty Path must be rejected")
+	}
 }
 
 // mustDiscoverOne is a test helper returning the single discovered target.
