@@ -116,6 +116,9 @@ func (s *KomodoSource) WritePin(ctx context.Context, p Proposal) (Applied, error
 	if err := json.Unmarshal(st.RawConfig, &cfg); err != nil {
 		return res, fmt.Errorf("komodo: stack %q: cannot parse config for read-modify-write: %w", st.Name, err)
 	}
+	if cfg == nil {
+		return res, fmt.Errorf("komodo: stack %q returned a null config; refusing to update (cannot preserve environment)", st.Name)
+	}
 	cfg["file_contents"] = newContent
 	if err := s.API.UpdateStackConfig(ctx, st.ID, cfg); err != nil {
 		return res, err

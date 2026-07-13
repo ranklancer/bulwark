@@ -30,7 +30,7 @@ nothing, rather than fighting or corrupting the real source of truth.
    `UpdateStack`): the exact `config` object Komodo returned, with **only**
    `file_contents` replaced. This preserves `environment`, volumes and every other
    field **regardless of whether Komodo's `UpdateStack` merges or replaces** the
-   config object -- the guarantee does not rest on merge semantics. If the fetched
+   config object -- the guarantee does not rest on merge semantics. (The full-config re-send is a JSON round-trip, so an integer config field larger than 2^53 could lose precision; the byte-for-byte env-survival gate below is the backstop.) If the fetched
    stack returns no `config` object, the write is refused (env-preservation cannot
    be guaranteed).
 
