@@ -28,7 +28,7 @@ type SourceConfig struct {
 
 	// Dockge (type: dockge) — Paths are stacks roots and Autodiscover enables
 	// probing well-known Dockge locations. ExtraRoots adds candidate roots
-	// (e.g. a TrueNAS ix-dockge apps path); DockgeCompose is an optional Dockge
+	// (e.g. an additional apps stacks root); DockgeCompose is an optional Dockge
 	// compose file whose stacks bind-mount locates the host stacks root.
 	ExtraRoots    []string `yaml:"extra_roots"`
 	DockgeCompose string   `yaml:"dockge_compose"`

@@ -161,7 +161,7 @@ deferral is documented, not silent.
 | Item | Status | Why |
 |---|---|---|
 | NPM proxy / nginx tuning | N/A | Bulwark binary serves the SPA directly. No proxy in repo. Any external proxy is outside our edit scope. |
-| ranklancer's 14-point Docker hardening (`/var/folders/.../CLAUDE.md`) | N/A | File doesn't exist here. Compose already has `no-new-privileges`, `cap_drop: ALL`, self-exclusion label. Further hardening is a separate operator-driven pass, not a perf concern. |
+| Operator Docker-hardening checklist | N/A | Out of scope here. Compose already has `no-new-privileges`, `cap_drop: ALL`, self-exclusion label. Further hardening is a separate operator-driven pass, not a perf concern. |
 | Rotate `GITHUB_PAT` to Vaultwarden | N/A | No `.env`, no Vaultwarden integration, no access. |
 | `pnpm perf:check` | Adapted | Repo uses npm; the script will be `npm run perf:check`. |
 | Live Lighthouse baseline against `bulwark.example.com` | Deferred | No network egress from this sandbox. Operator fills in §7 from a local run, or Phase 4's CI gate produces the first reproducible numbers. |

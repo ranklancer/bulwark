@@ -1,5 +1,5 @@
 # STAGED — copy to .github/workflows/codeql.yml with a workflow-scoped token
-# (bulwark-ci is contents-only). See docs/ci/README.md. Token-gated SAST grader.
+# (a contents-only token cannot push workflows). See docs/ci/README.md. Token-gated SAST grader.
 name: codeql
 
 on:

@@ -1,6 +1,6 @@
 # CI hardening (staged)
 
-Drop-in CI files that `bulwark-ci` cannot push (it is contents-only; GitHub
+Drop-in CI files a contents-only token cannot push (it lacks the `workflow` scope; GitHub
 rejects any push touching `.github/workflows/*` without the `workflow` scope).
 Activate each with a workflow-scoped token.
 
@@ -72,7 +72,7 @@ FROM alpine:3.20@sha256:<digest>
 
 Keep the human-readable tag alongside the digest (as above) so Dependabot / a
 bump PR can still track updates. This change touches only the `Dockerfile`
-(pushable by `bulwark-ci`) and can land in the fix-forward PR if you want it now
+(pushable by a contents-only token) and can land in the fix-forward PR if you want it now
  it was left out here to keep the security-code changes reviewable in isolation.
 
 ## 4. CodeQL code scanning (token-gated SAST)

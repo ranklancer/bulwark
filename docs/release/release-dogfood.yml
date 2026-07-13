@@ -1,10 +1,10 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGED WORKFLOW — NOT ACTIVE HERE.
 #
-# This file lives under docs/release/ on purpose: the `bulwark-ci` PAT is
+# This file lives under docs/release/ on purpose: a contents-only PAT is
 # contents-only and GitHub rejects any push that adds/edits .github/workflows/*
 # without the `workflow` scope. To activate, copy this file to
-# `.github/workflows/release-dogfood.yml` using a workflow-scoped token (ranklancer).
+# `.github/workflows/release-dogfood.yml` using a workflow-scoped token.
 # See docs/release/README.md.
 #
 # Supply-chain dogfooding for Bulwark's own releases: multi-arch binaries + a

@@ -1,6 +1,6 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # STAGED WORKFLOW — NOT ACTIVE HERE. Copy to .github/workflows/scan.yml with a
-# workflow-scoped token (bulwark-ci is contents-only; see docs/ci/README.md).
+# workflow-scoped token (a contents-only token cannot push workflows; see docs/ci/README.md).
 #
 # Static-analysis + supply-chain scan gate, mirroring `make gate-full` + the
 # advisory tools. Pinned tool versions (never @latest — the repo targets Go 1.22

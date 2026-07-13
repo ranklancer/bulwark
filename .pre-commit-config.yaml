@@ -1,4 +1,4 @@
-# Pre-commit hooks — Bulwark (homelab).
+# Pre-commit hooks — Bulwark.
 #
 # One-time setup (per clone):
 #   pip install pre-commit

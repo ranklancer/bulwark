@@ -1,4 +1,4 @@
-# Gitleaks configuration — homelab
+# Gitleaks configuration — Bulwark
 # Commit-time + CI secret scanning. Uses the upstream gitleaks default
 # ruleset (pinned via the hook/workflow to v8.30.1).
 #

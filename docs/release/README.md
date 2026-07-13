@@ -13,12 +13,12 @@ for every `v*` tag:
 ## Files
 
 - `../../.goreleaser.yaml` — GoReleaser config (builds, archives, checksum,
-  SBOM, cosign). Pushable by `bulwark-ci`.
+  SBOM, cosign). Pushable by a contents-only token.
 - `release-dogfood.yml` — the GitHub Actions workflow, **staged here**.
 
-## ⚠️ Activation needs a workflow-scoped token (ranklancer)
+## ⚠️ Activation needs a workflow-scoped token
 
-`bulwark-ci` is contents-only; GitHub rejects any push touching
+A contents-only token cannot push `.github/workflows/*`; GitHub rejects any push touching
 `.github/workflows/*` without the `workflow` scope. To activate:
 
 ```sh

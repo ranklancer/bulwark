@@ -30,7 +30,7 @@ const dockgeContainerStacksDefault = "/app/stacks"
 // from the generic ComposeSource in that it locates Dockge stacks specifically:
 // from explicit roots, the DOCKGE_STACKS_DIR env var, an optional Dockge compose
 // bind-mount, or the Dockge default — plus any operator-supplied extra roots
-// (e.g. a TrueNAS "ix-dockge" apps stacks path).
+// (e.g. an additional apps stacks root).
 //
 // General-purpose: nothing is hardcoded to a particular host or deployment.
 // Discovery is fail-closed — it never follows a symlink out of a stacks root
@@ -45,7 +45,7 @@ type DockgeSource struct {
 	// default /opt/stacks, and any ExtraRoots. Discovery only — never a write.
 	Autodetect bool
 	// ExtraRoots are additional candidate roots consulted during autodetection,
-	// e.g. a TrueNAS ix-dockge apps stacks path. Operator-configured; general.
+	// e.g. an additional apps stacks root. Operator-configured; general.
 	ExtraRoots []string
 	// DockgeCompose is an optional path to the compose file that runs Dockge
 	// itself; during autodetection its stacks bind-mount is used to locate the

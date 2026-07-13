@@ -22,8 +22,8 @@ sources:
       - /opt/stacks
     # …or let bulwark probe well-known locations instead of listing paths:
     autodiscover: true
-    # Extra candidate roots consulted during autodiscover (e.g. a TrueNAS
-    # ix-dockge apps stacks path). General — configure whatever your host uses.
+    # Extra candidate roots consulted during autodiscover (e.g. an
+    # additional apps stacks root). General — configure whatever your host uses.
     extra_roots:
       - /mnt/tank/ix-applications/dockge/stacks
     # Optional: point at the compose that runs Dockge itself; its stacks

@@ -46,7 +46,7 @@ lint:
 
 # Supply-chain vulnerability scan (ADVISORY on this box). Reports only vulns
 # the code actually reaches. Currently red due to Go 1.22.12 stdlib CVEs — a
-# toolchain-patch decision for ranklancer, not a repo fix. Re-add to gate-full once
+# toolchain-patch decision for the maintainer, not a repo fix. Re-add to gate-full once
 # the Go patch level is bumped.
 vuln:
 	@command -v $(GOBIN)/govulncheck >/dev/null 2>&1 || { echo "govulncheck missing — run: make tools"; exit 1; }
@@ -75,7 +75,7 @@ cover:
 #   - vuln: govulncheck flags 35 Go *stdlib* CVEs tied to the pinned Go 1.22.12
 #           toolchain being behind on patch releases (bulwark's own deps are
 #           clean/non-affecting). Resolving them means bumping the Go patch
-#           level, which collides with GOTOOLCHAIN=local — an infra call for ranklancer.
+#           level, which collides with GOTOOLCHAIN=local — an infra call for the maintainer.
 #   - sec : 21 gosec findings in the capture/store/registry security paths
 #           need triage (fix or #nosec rationale). See internal engineering notes.
 gate-full: gate lint cover
