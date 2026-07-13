@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/bulwark-docker/bulwark/internal/registry"
 )
 
 // KomodoSource is the API/DB-managed adapter for Komodo. Komodo keeps each Stack
@@ -62,16 +64,24 @@ func (s *KomodoSource) ProposePin(_ context.Context, t Target, ref ImageRef, pin
 	return computePinProposal(t, ref, pin)
 }
 
-// WritePin applies a proposal through the Komodo API: re-fetch the stack (freshness
-// + source check), splice the digest into the current file_contents (fail-closed
-// on drift), and push it back via a PARTIAL UpdateStack (only file_contents), which
-// preserves the stack's environment and other config. Repo-backed and
-// files-on-server stacks are refused.
+// WritePin applies a proposal through the Komodo API. It: (1) re-asserts the new
+// value is a digest pin at the write boundary (parity with the file write path);
+// (2) re-fetches the stack (freshness + source check) and refuses repo-backed,
+// files-on-server, or empty-file_contents stacks; (3) splices the digest into the
+// current file_contents (fail-closed on drift); and (4) pushes back a READ-MODIFY-
+// WRITE of the FULL config — the exact config Komodo returned, with only
+// file_contents changed — so environment, volumes and every other field survive
+// regardless of whether UpdateStack merges or replaces the config object.
 func (s *KomodoSource) WritePin(ctx context.Context, p Proposal) (Applied, error) {
 	res := Applied{Path: p.Path, Line: p.Line, OldValue: p.OldValue, NewValue: p.NewValue}
 	if p.NoOp {
 		res.NoOp = true
 		return res, nil
+	}
+	// Write-boundary digest guard: never splice a non-digest ref onto a remote
+	// orchestrator, even from a hand-built or drifted Proposal. Mirrors write.go.
+	if at := strings.LastIndex(p.NewValue, "@"); at < 0 || !registry.IsSHA256Digest(strings.ToLower(p.NewValue[at+1:])) {
+		return res, fmt.Errorf("komodo: refusing to write non-digest pin %q (expected image@sha256:...)", p.NewValue)
 	}
 	st, err := s.API.GetStack(ctx, p.Path)
 	if err != nil {
@@ -97,26 +107,40 @@ func (s *KomodoSource) WritePin(ctx context.Context, p Proposal) (Applied, error
 		res.NoOp = true
 		return res, nil
 	}
-	if err := s.API.UpdateStackFileContents(ctx, st.ID, newContent); err != nil {
+	// Read-modify-write the FULL config so environment (and everything else) is
+	// preserved whether Komodo merges or replaces the config object on update.
+	if len(st.RawConfig) == 0 {
+		return res, fmt.Errorf("komodo: stack %q returned no config object; refusing to update (cannot guarantee environment is preserved)", st.Name)
+	}
+	var cfg map[string]any
+	if err := json.Unmarshal(st.RawConfig, &cfg); err != nil {
+		return res, fmt.Errorf("komodo: stack %q: cannot parse config for read-modify-write: %w", st.Name, err)
+	}
+	cfg["file_contents"] = newContent
+	if err := s.API.UpdateStackConfig(ctx, st.ID, cfg); err != nil {
 		return res, err
 	}
 	return res, nil
 }
 
-// KomodoStack is the subset of a Komodo stack the adapter needs.
+// KomodoStack is the subset of a Komodo stack the adapter needs. RawConfig is the
+// full, untouched config object as returned by Komodo, used for read-modify-write.
 type KomodoStack struct {
 	ID           string
 	Name         string
 	FileContents string
 	Git          bool // repo / resource-sync backed (source of truth = git)
 	FilesOnHost  bool // compose lives on the managed server's filesystem
+	RawConfig    json.RawMessage
 }
 
 // KomodoAPI is the minimal Komodo API surface the adapter uses.
 type KomodoAPI interface {
 	ListStacks(ctx context.Context) ([]KomodoStack, error)
 	GetStack(ctx context.Context, idOrName string) (KomodoStack, error)
-	UpdateStackFileContents(ctx context.Context, id, content string) error
+	// UpdateStackConfig sends the FULL config object (with file_contents already
+	// updated) so no field is lost regardless of merge-vs-replace semantics.
+	UpdateStackConfig(ctx context.Context, id string, config map[string]any) error
 }
 
 // KomodoConfig configures the concrete HTTP client. Komodo authenticates with an
@@ -199,34 +223,37 @@ func (c *httpKomodoClient) GetStack(ctx context.Context, idOrName string) (Komod
 	return r.toStack(), nil
 }
 
-func (c *httpKomodoClient) UpdateStackFileContents(ctx context.Context, id, content string) error {
-	params := map[string]any{
-		"id":     id,
-		"config": map[string]any{"file_contents": content},
-	}
-	return c.call(ctx, "/write", "UpdateStack", params, nil)
+func (c *httpKomodoClient) UpdateStackConfig(ctx context.Context, id string, config map[string]any) error {
+	return c.call(ctx, "/write", "UpdateStack", map[string]any{"id": id, "config": config}, nil)
 }
 
-// komodoStackJSON mirrors the Komodo stack JSON we consume. config is a pointer so
-// list items (which omit it) and full stacks are both handled.
+// komodoStackJSON mirrors the Komodo stack JSON we consume. Config is kept raw so
+// WritePin can round-trip the full object; the typed signals are decoded from it.
 type komodoStackJSON struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Config *struct {
+	ID     string          `json:"id"`
+	Name   string          `json:"name"`
+	Config json.RawMessage `json:"config"`
+}
+
+func (r komodoStackJSON) toStack() KomodoStack {
+	st := KomodoStack{ID: r.ID, Name: r.Name, RawConfig: r.Config}
+	if len(r.Config) == 0 {
+		return st
+	}
+	var c struct {
 		FileContents string `json:"file_contents"`
 		Repo         string `json:"repo"`
 		LinkedRepo   string `json:"linked_repo"`
 		FilesOnHost  bool   `json:"files_on_host"`
-	} `json:"config"`
-}
-
-func (r komodoStackJSON) toStack() KomodoStack {
-	st := KomodoStack{ID: r.ID, Name: r.Name}
-	if r.Config != nil {
-		st.FileContents = r.Config.FileContents
-		st.Git = strings.TrimSpace(r.Config.Repo) != "" || strings.TrimSpace(r.Config.LinkedRepo) != ""
-		st.FilesOnHost = r.Config.FilesOnHost
 	}
+	if err := json.Unmarshal(r.Config, &c); err != nil {
+		// Unparseable config -> fail closed: flag as git-backed so WritePin refuses.
+		st.Git = true
+		return st
+	}
+	st.FileContents = c.FileContents
+	st.Git = strings.TrimSpace(c.Repo) != "" || strings.TrimSpace(c.LinkedRepo) != ""
+	st.FilesOnHost = c.FilesOnHost
 	return st
 }
 

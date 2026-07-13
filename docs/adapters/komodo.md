@@ -21,11 +21,18 @@ nothing, rather than fighting or corrupting the real source of truth.
    extracts image references from `config.file_contents` using the shared
    compose parser (the same parser the file adapters use).
 3. `ProposePin` computes the pin edit with the shared, adapter-agnostic proposer.
-4. `WritePin` re-fetches the stack (freshness + source check), splices the digest
-   into the *current* `file_contents` with the shared drift-checked splicer, and
-   pushes it back with a **partial** `UpdateStack` (`POST /write`) that carries
-   only `file_contents`. Komodo merges the partial config, so the stack's
-   `environment` and every other field are preserved untouched.
+4. `WritePin` first re-asserts the new value is a `@sha256:` **digest** pin (parity
+   with the file write path -- a hand-built or drifted proposal can never splice a
+   bare tag onto the orchestrator), re-fetches the stack (freshness + source
+   check), and splices the digest into the *current* `file_contents` with the
+   shared drift-checked splicer.
+5. It then pushes back a **read-modify-write of the FULL config** (`POST /write`
+   `UpdateStack`): the exact `config` object Komodo returned, with **only**
+   `file_contents` replaced. This preserves `environment`, volumes and every other
+   field **regardless of whether Komodo's `UpdateStack` merges or replaces** the
+   config object -- the guarantee does not rest on merge semantics. If the fetched
+   stack returns no `config` object, the write is refused (env-preservation cannot
+   be guaranteed).
 
 ## Configuration
 
@@ -83,14 +90,27 @@ to a Komodo pin; the canary controller reports **`MANUAL ROLLBACK REQUIRED`** an
 takes no destructive action. Roll back by editing the stack in Komodo (revert the
 image tag / remove the digest) and redeploying.
 
-## ⚠️ Required before production: a live smoke test
+## ⚠️ HARD pre-production gate: a live env-survival smoke test
 
-The adapter is covered by unit tests against a fake Komodo API and an httptest
-server, but it has **not** been exercised against a live Komodo instance. Before
-relying on it in production, run one capture against a disposable UI-defined
-stack and confirm: (1) `Discover`/`LocateImageRefs` return the expected images;
-(2) a `--apply` writes the pinned digest via `UpdateStack`; (3) the stack's
-`environment` and other config survive the partial update unchanged; (4) a
-repo-backed and a files-on-server stack are both refused. The empty-`file_contents`
-guard exists specifically because the live `GetStack`/`UpdateStack` contract has
-not yet been confirmed end-to-end.
+This adapter has **not** been exercised against a live Komodo instance; its
+coverage is unit + `httptest` fakes only. Enabling a Komodo source against a
+production stack is **BLOCKED** until the following live smoke test passes -- this
+is a hard gate, not a recommendation.
+
+Run one capture against a disposable UI-defined stack **that has at least one
+`environment` variable set** and assert, in order:
+
+1. `Discover` / `LocateImageRefs` return the stack and its expected image(s).
+2. A `--apply` writes the pinned `@sha256:` digest via `UpdateStack`.
+3. **Env survival (the blocking assertion):** re-fetch the stack after the write
+   and confirm every pre-existing `environment` entry (and any volumes / other
+   config) is **byte-for-byte unchanged** -- only `file_contents` differs. If any
+   env value is missing or altered, the Komodo `UpdateStack` contract differs from
+   what this adapter assumes; **do not ship** -- stop and re-evaluate the write.
+4. A repo/resource-sync-backed stack and a files-on-server stack are both refused.
+5. A stack whose `GetStack` returns no `config` object is refused (not written empty).
+
+Only after step 3 is verified green against the live API may a Komodo source be
+promoted beyond a disposable test stack. The full-config read-modify-write and the
+empty-`file_contents` / missing-`config` guards exist precisely because this
+contract is unconfirmed end-to-end until this gate runs.

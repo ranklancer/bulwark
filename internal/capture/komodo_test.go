@@ -13,11 +13,11 @@ import (
 // fakeKomodo is an in-memory KomodoAPI for testing the Source logic.
 type fakeKomodo struct {
 	stacks  map[string]KomodoStack
-	updated map[string]string
+	updated map[string]map[string]any // full config sent to UpdateStackConfig
 }
 
 func newFakeKomodo() *fakeKomodo {
-	return &fakeKomodo{stacks: map[string]KomodoStack{}, updated: map[string]string{}}
+	return &fakeKomodo{stacks: map[string]KomodoStack{}, updated: map[string]map[string]any{}}
 }
 func (f *fakeKomodo) ListStacks(_ context.Context) ([]KomodoStack, error) {
 	var out []KomodoStack
@@ -29,10 +29,12 @@ func (f *fakeKomodo) ListStacks(_ context.Context) ([]KomodoStack, error) {
 func (f *fakeKomodo) GetStack(_ context.Context, idOrName string) (KomodoStack, error) {
 	return f.stacks[idOrName], nil
 }
-func (f *fakeKomodo) UpdateStackFileContents(_ context.Context, id, content string) error {
-	f.updated[id] = content
+func (f *fakeKomodo) UpdateStackConfig(_ context.Context, id string, config map[string]any) error {
+	f.updated[id] = config
 	s := f.stacks[id]
-	s.FileContents = content
+	if fc, ok := config["file_contents"].(string); ok {
+		s.FileContents = fc
+	}
 	f.stacks[id] = s
 	return nil
 }
@@ -57,9 +59,12 @@ func TestKomodoSource_DiscoverListsStacks(t *testing.T) {
 	}
 }
 
-func TestKomodoSource_WritePinAppliesViaAPI(t *testing.T) {
+func TestKomodoSource_WritePinAppliesFullConfigPreservingEnv(t *testing.T) {
 	f := newFakeKomodo()
-	f.stacks["s7"] = KomodoStack{ID: "s7", Name: "web", FileContents: "services:\n  app:\n    image: nginx:1.27\n"}
+	// RawConfig carries environment alongside file_contents; the read-modify-write
+	// must re-send it so a pin never wipes env (merge-vs-replace safe).
+	raw := json.RawMessage(`{"file_contents":"services:\n  app:\n    image: nginx:1.27\n","environment":"FOO=bar"}`)
+	f.stacks["s7"] = KomodoStack{ID: "s7", Name: "web", FileContents: "services:\n  app:\n    image: nginx:1.27\n", RawConfig: raw}
 	src := &KomodoSource{API: f}
 	tgt := Target{Name: "web", Path: "s7", Kind: KindManaged}
 	refs, err := src.LocateImageRefs(context.Background(), tgt)
@@ -74,8 +79,30 @@ func TestKomodoSource_WritePinAppliesViaAPI(t *testing.T) {
 	if _, err := src.WritePin(context.Background(), prop); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.updated["s7"]; !strings.Contains(got, "nginx:1.27@"+d) {
-		t.Fatalf("update did not contain pinned digest: %q", got)
+	sent := f.updated["s7"]
+	if sent == nil {
+		t.Fatal("no config was sent")
+	}
+	if fc, _ := sent["file_contents"].(string); !strings.Contains(fc, "nginx:1.27@"+d) {
+		t.Fatalf("file_contents not pinned: %q", fc)
+	}
+	if env, _ := sent["environment"].(string); env != "FOO=bar" {
+		t.Fatalf("environment not preserved in full-config write: %q", env)
+	}
+}
+
+func TestKomodoSource_WritePinRefusesNonDigest(t *testing.T) {
+	f := newFakeKomodo()
+	f.stacks["n1"] = KomodoStack{ID: "n1", Name: "nd", FileContents: "services:\n  app:\n    image: nginx:1.27\n", RawConfig: json.RawMessage(`{"file_contents":"x"}`)}
+	src := &KomodoSource{API: f}
+	// NewValue is a tag, not a digest -> must be refused at the write boundary.
+	prop := Proposal{Path: "n1", Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.28"}
+	_, err := src.WritePin(context.Background(), prop)
+	if err == nil || !strings.Contains(err.Error(), "non-digest pin") {
+		t.Fatalf("want non-digest refusal, got %v", err)
+	}
+	if _, ok := f.updated["n1"]; ok {
+		t.Fatal("must not write a non-digest pin")
 	}
 }
 
@@ -118,6 +145,37 @@ func TestKomodoSource_WritePinRefusesEmptyContents(t *testing.T) {
 	}
 }
 
+func TestKomodoSource_WritePinRefusesOnDrift(t *testing.T) {
+	f := newFakeKomodo()
+	// The live file no longer contains OldValue -> fail-closed drift guard: refuse.
+	f.stacks["d1"] = KomodoStack{ID: "d1", Name: "drift", FileContents: "services:\n  app:\n    image: nginx:1.28\n", RawConfig: json.RawMessage(`{"file_contents":"x"}`)}
+	src := &KomodoSource{API: f}
+	prop := Proposal{Path: "d1", Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.27@" + kdigest64("e")}
+	_, err := src.WritePin(context.Background(), prop)
+	if err == nil || !strings.Contains(err.Error(), "no longer contains") {
+		t.Fatalf("want drift refusal, got %v", err)
+	}
+	if _, ok := f.updated["d1"]; ok {
+		t.Fatal("must not write when the live value drifted")
+	}
+}
+
+func TestKomodoSource_WritePinRefusesMissingConfig(t *testing.T) {
+	f := newFakeKomodo()
+	// Non-empty file_contents but no RawConfig object -> cannot guarantee env
+	// preservation on a full-config write, so refuse.
+	f.stacks["m1"] = KomodoStack{ID: "m1", Name: "noconf", FileContents: "services:\n  app:\n    image: nginx:1.27\n"}
+	src := &KomodoSource{API: f}
+	prop := Proposal{Path: "m1", Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.27@" + kdigest64("f")}
+	_, err := src.WritePin(context.Background(), prop)
+	if err == nil || !strings.Contains(err.Error(), "no config object") {
+		t.Fatalf("want missing-config refusal, got %v", err)
+	}
+	if _, ok := f.updated["m1"]; ok {
+		t.Fatal("must not write without a full config object")
+	}
+}
+
 func TestNewKomodoClient_Validation(t *testing.T) {
 	if _, err := NewKomodoClient(KomodoConfig{BaseURL: "", APIKey: "k", APISecret: "s"}); err == nil {
 		t.Fatal("empty base url must error")
@@ -131,7 +189,6 @@ func TestNewKomodoClient_Validation(t *testing.T) {
 	if _, err := NewKomodoClient(KomodoConfig{BaseURL: "https://k.example", APIKey: "k", APISecret: ""}); err == nil {
 		t.Fatal("missing api secret must error")
 	}
-	// Cleartext to non-loopback host is refused unless opted in.
 	if _, err := NewKomodoClient(KomodoConfig{BaseURL: "http://k.example:9120", APIKey: "k", APISecret: "s"}); err == nil {
 		t.Fatal("cleartext non-loopback base must be refused")
 	}
@@ -142,6 +199,7 @@ func TestNewKomodoClient_Validation(t *testing.T) {
 
 func TestHTTPKomodoClient_RoundTrip(t *testing.T) {
 	var gotKey, gotSecret string
+	var sentConfig map[string]any
 	seen := map[string]bool{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotKey = r.Header.Get("X-Api-Key")
@@ -159,9 +217,15 @@ func TestHTTPKomodoClient_RoundTrip(t *testing.T) {
 		case r.URL.Path == "/read" && req.Type == "GetStack":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "s1", "name": "web",
-				"config": map[string]any{"file_contents": "services:\n  app:\n    image: nginx:1.27\n"},
+				"config": map[string]any{"file_contents": "services:\n  app:\n    image: nginx:1.27\n", "environment": "A=1"},
 			})
 		case r.URL.Path == "/write" && req.Type == "UpdateStack":
+			var p struct {
+				ID     string         `json:"id"`
+				Config map[string]any `json:"config"`
+			}
+			_ = json.Unmarshal(req.Params, &p)
+			sentConfig = p.Config
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 		default:
@@ -179,14 +243,17 @@ func TestHTTPKomodoClient_RoundTrip(t *testing.T) {
 		t.Fatalf("ListStacks: err=%v stacks=%+v", err, stacks)
 	}
 	st, err := c.GetStack(context.Background(), "s1")
-	if err != nil || !strings.Contains(st.FileContents, "nginx:1.27") {
+	if err != nil || !strings.Contains(st.FileContents, "nginx:1.27") || len(st.RawConfig) == 0 {
 		t.Fatalf("GetStack: err=%v st=%+v", err, st)
 	}
-	if err := c.UpdateStackFileContents(context.Background(), "s1", "x"); err != nil {
+	if err := c.UpdateStackConfig(context.Background(), "s1", map[string]any{"file_contents": "x", "environment": "A=1"}); err != nil {
 		t.Fatal(err)
 	}
 	if gotKey != "KEY" || gotSecret != "SEC" {
 		t.Fatalf("auth headers not set: key=%q secret=%q", gotKey, gotSecret)
+	}
+	if sentConfig["environment"] != "A=1" {
+		t.Fatalf("full config not sent on update: %+v", sentConfig)
 	}
 	for _, want := range []string{"/read:ListStacks", "/read:GetStack", "/write:UpdateStack"} {
 		if !seen[want] {
@@ -209,47 +276,25 @@ func TestHTTPKomodoClient_Non2xxErrors(t *testing.T) {
 	}
 }
 
-func TestKomodoStackJSON_GitSignal(t *testing.T) {
-	repo := komodoStackJSON{ID: "1", Config: &struct {
-		FileContents string `json:"file_contents"`
-		Repo         string `json:"repo"`
-		LinkedRepo   string `json:"linked_repo"`
-		FilesOnHost  bool   `json:"files_on_host"`
-	}{Repo: "org/repo"}}
-	if !repo.toStack().Git {
+func TestKomodoStackJSON_Signals(t *testing.T) {
+	mk := func(cfg string) KomodoStack {
+		return komodoStackJSON{ID: "x", Name: "n", Config: json.RawMessage(cfg)}.toStack()
+	}
+	if !mk(`{"repo":"org/repo"}`).Git {
 		t.Fatal("non-empty repo must flag Git")
 	}
-	linked := komodoStackJSON{ID: "2", Config: &struct {
-		FileContents string `json:"file_contents"`
-		Repo         string `json:"repo"`
-		LinkedRepo   string `json:"linked_repo"`
-		FilesOnHost  bool   `json:"files_on_host"`
-	}{LinkedRepo: "abc"}}
-	if !linked.toStack().Git {
+	if !mk(`{"linked_repo":"abc"}`).Git {
 		t.Fatal("non-empty linked_repo must flag Git")
 	}
-	ui := komodoStackJSON{ID: "3", Config: &struct {
-		FileContents string `json:"file_contents"`
-		Repo         string `json:"repo"`
-		LinkedRepo   string `json:"linked_repo"`
-		FilesOnHost  bool   `json:"files_on_host"`
-	}{FileContents: "services: {}"}}
-	if ui.toStack().Git {
+	if mk(`{"file_contents":"services: {}"}`).Git {
 		t.Fatal("UI-defined stack must not flag Git")
 	}
-}
-func TestKomodoSource_WritePinRefusesOnDrift(t *testing.T) {
-	f := newFakeKomodo()
-	// The live file no longer contains OldValue -> fail-closed drift guard: refuse
-	// the write rather than corrupt content that changed since propose.
-	f.stacks["d1"] = KomodoStack{ID: "d1", Name: "drift", FileContents: "services:\n  app:\n    image: nginx:1.28\n"}
-	src := &KomodoSource{API: f}
-	prop := Proposal{Path: "d1", Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.27@" + kdigest64("e")}
-	_, err := src.WritePin(context.Background(), prop)
-	if err == nil || !strings.Contains(err.Error(), "no longer contains") {
-		t.Fatalf("want drift refusal, got %v", err)
+	// Unparseable config -> fail closed (treated as Git so WritePin refuses).
+	if !mk(`{bad json`).Git {
+		t.Fatal("unparseable config must fail closed to Git")
 	}
-	if _, ok := f.updated["d1"]; ok {
-		t.Fatal("must not write when the live value drifted")
+	// RawConfig is always retained for the read-modify-write path.
+	if len(mk(`{"file_contents":"x"}`).RawConfig) == 0 {
+		t.Fatal("RawConfig must be retained")
 	}
 }
