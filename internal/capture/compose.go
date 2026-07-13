@@ -105,10 +105,18 @@ func (s *ComposeSource) LocateImageRefs(_ context.Context, t Target) ([]ImageRef
 	if err != nil {
 		return nil, fmt.Errorf("capture: read %s: %w", t.Path, err)
 	}
-	env := loadDotEnv(filepath.Dir(t.Path))
+	return imageRefsFromComposeBytes(data, loadDotEnv(filepath.Dir(t.Path)))
+}
+
+// imageRefsFromComposeBytes parses compose YAML and returns each service's image
+// reference, expanding ${VAR} against env and flagging non-pinnable refs. Shared
+// by the file adapters and by API/DB-managed adapters, which fetch the compose
+// text from an orchestrator rather than a file. Untrusted input: it never panics
+// and reports a parse error instead of crashing.
+func imageRefsFromComposeBytes(data []byte, env map[string]string) ([]ImageRef, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("capture: parse %s: %w", t.Path, err)
+		return nil, fmt.Errorf("capture: parse compose: %w", err)
 	}
 	services := findMapping(&doc, "services")
 	if services == nil {
@@ -169,6 +177,13 @@ func classifyRef(ref string) (bool, string) {
 
 // ProposePin computes the inline digest pin for ref WITHOUT writing anything.
 func (s *ComposeSource) ProposePin(_ context.Context, t Target, ref ImageRef, pin Pin) (Proposal, error) {
+	return computePinProposal(t, ref, pin)
+}
+
+// computePinProposal computes the digest-pin edit for ref WITHOUT applying it.
+// Adapter-agnostic (uses only Target/ImageRef/Pin), so file and API/DB-managed
+// adapters share the same fail-closed digest validation and splice computation.
+func computePinProposal(t Target, ref ImageRef, pin Pin) (Proposal, error) {
 	if !ref.Pinnable {
 		return Proposal{}, fmt.Errorf("capture: %s/%s not pinnable: %s", t.Name, ref.Service, ref.Reason)
 	}
