@@ -39,7 +39,14 @@ func TestSessionScheme_VerifyRejectsTampered(t *testing.T) {
 	if idx < 0 {
 		t.Fatal("malformed value")
 	}
-	tampered := value[:idx+1] + "X" + value[idx+2:]
+	// Flip the first signature byte to a value guaranteed to differ, so the
+	// "tamper" is never a no-op (a fixed "X" collides when the byte is already
+	// 'X', which made this test intermittently pass a valid cookie).
+	repl := byte('X')
+	if value[idx+1] == repl {
+		repl = 'Y'
+	}
+	tampered := value[:idx+1] + string(repl) + value[idx+2:]
 	if s.Verify(tampered) {
 		t.Error("tampered cookie should not verify")
 	}
