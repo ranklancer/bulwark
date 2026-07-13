@@ -9,11 +9,13 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -97,6 +99,14 @@ func (s *PortainerSource) WritePin(ctx context.Context, p Proposal) (Applied, er
 	if st.Git {
 		return res, fmt.Errorf("portainer: stack %q (id %d) is git-managed; pin it in its git source, not via the API — refusing to overwrite git-tracked content", st.Name, id)
 	}
+	// Defensive contract check (the adapter is built to the documented API but
+	// not yet integration-tested live): a well-formed Portainer stack returns its
+	// Env array (empty [] is fine; nil means the response shape is not what we
+	// expect). Pushing a nil Env back could clear the stack environment on
+	// redeploy — refuse until a live smoke test confirms the contract.
+	if st.Env == nil {
+		return res, fmt.Errorf("portainer: stack %q (id %d) returned no Env field; refusing to update (would risk clearing the stack environment) — confirm the API contract with a live smoke test", st.Name, id)
+	}
 	content, err := s.API.StackFile(ctx, id)
 	if err != nil {
 		return res, err
@@ -147,6 +157,7 @@ type PortainerConfig struct {
 	APIKey             string // sent as X-API-Key; never logged
 	CAFile             string // optional PEM bundle to trust a private issuing CA
 	InsecureSkipVerify bool   // explicit opt-in; logs a warning. Prefer CAFile
+	AllowInsecureHTTP  bool   // opt-in to a cleartext http:// base to a non-loopback host
 	HTTPClient         *http.Client
 	Logger             *slog.Logger
 }
@@ -179,6 +190,18 @@ func NewPortainerClient(cfg PortainerConfig) (PortainerAPI, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("portainer: api key is required (configure a creds_ref; never inline the secret)")
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	// Cleartext base URL: the X-API-Key would travel unencrypted. Refuse for a
+	// non-loopback host unless the operator explicitly opts in (loopback is safe).
+	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
+		if !cfg.AllowInsecureHTTP {
+			return nil, fmt.Errorf("portainer: refusing a cleartext http:// base URL to non-loopback host %q — the API key would be sent unencrypted; use https, or set allow_insecure_http: true to override", u.Host)
+		}
+		logger.Warn("portainer: cleartext http base URL in use; the API key is sent unencrypted", "host", u.Host)
+	}
 	hc := cfg.HTTPClient
 	if hc == nil {
 		tlsCfg, err := portainerTLSConfig(cfg)
@@ -187,7 +210,7 @@ func NewPortainerClient(cfg PortainerConfig) (PortainerAPI, error) {
 		}
 		hc = &http.Client{
 			Timeout:       30 * time.Second,
-			Transport:     &http.Transport{TLSClientConfig: tlsCfg},
+			Transport:     guardedTransport(tlsCfg),
 			CheckRedirect: refuseCrossHostRedirect,
 		}
 	}
@@ -227,11 +250,63 @@ func refuseCrossHostRedirect(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
 	}
-	if req.URL.Host != via[0].URL.Host {
+	orig := via[0].URL
+	if req.URL.Host != orig.Host {
 		return fmt.Errorf("portainer: refusing cross-host redirect to %q", req.URL.Host)
+	}
+	// Refuse ANY scheme change on a same-host redirect. In particular this blocks
+	// an https->http downgrade, which would re-send the X-API-Key over cleartext
+	// to the same host — exactly the leak the cross-host guard alone misses.
+	if req.URL.Scheme != orig.Scheme {
+		return fmt.Errorf("portainer: refusing redirect changing scheme %q->%q (credential-downgrade guard)", orig.Scheme, req.URL.Scheme)
 	}
 	if len(via) >= 10 {
 		return errors.New("portainer: too many redirects")
+	}
+	return nil
+}
+
+// isLoopbackHost reports whether host is localhost or a loopback IP literal.
+func isLoopbackHost(host string) bool {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// guardedTransport builds an http.Transport whose dialer rejects link-local,
+// multicast and unspecified connect IPs after DNS resolution. This contains
+// DNS-rebinding SSRF to those targets (e.g. 169.254.169.254 cloud metadata),
+// which are never a legitimate Portainer host. Loopback and RFC1918 are allowed
+// on purpose: self-hosted Portainer commonly lives on a private/loopback address.
+func guardedTransport(tlsCfg *tls.Config) *http.Transport {
+	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: blockDangerousConnectIP}
+	return &http.Transport{
+		TLSClientConfig:       tlsCfg,
+		DialContext:           d.DialContext,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// blockDangerousConnectIP runs on the resolved IP just before connect.
+func blockDangerousConnectIP(_, address string, _ syscall.RawConn) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil
+	}
+	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("portainer: refusing to connect to disallowed address %s (SSRF guard: link-local/multicast/unspecified)", ip)
 	}
 	return nil
 }
@@ -293,8 +368,25 @@ type portainerStackJSON struct {
 func (r portainerStackJSON) toStack() PortainerStack {
 	return PortainerStack{
 		ID: r.ID, Name: r.Name, EndpointID: r.EndpointID, Type: r.Type,
-		Git: r.GitConfig != nil, Env: r.Env,
+		Git: gitConfigHasRepo(r.GitConfig), Env: r.Env,
 	}
+}
+
+// gitConfigHasRepo reports whether a stack is git-managed using a POSITIVE
+// signal: a GitConfig carrying a repository URL. A present-but-unparseable
+// GitConfig is treated as git-managed (fail-closed: never overwrite something
+// that might be git-tracked). A nil GitConfig is not git-managed.
+func gitConfigHasRepo(raw *json.RawMessage) bool {
+	if raw == nil {
+		return false
+	}
+	var g struct {
+		URL string `json:"URL"`
+	}
+	if err := json.Unmarshal(*raw, &g); err != nil {
+		return true // present but unparseable -> fail closed (treat as git)
+	}
+	return strings.TrimSpace(g.URL) != ""
 }
 
 // do issues an authenticated request and decodes a 2xx JSON response into out

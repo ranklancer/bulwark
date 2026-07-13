@@ -120,6 +120,7 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 				}
 				pc, err := capture.NewPortainerClient(capture.PortainerConfig{
 					BaseURL: sc.Endpoint, APIKey: apiKey, CAFile: sc.CAFile, InsecureSkipVerify: sc.InsecureSkipVerify,
+					AllowInsecureHTTP: sc.AllowInsecureHTTP,
 				})
 				if err != nil {
 					fmt.Fprintf(stdout, "source %q: portainer client: %v — skipping\n", sc.Name, err)
@@ -215,7 +216,7 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 					if pins != nil {
 						_ = pins.Set(tgt.Name+"/"+r.Service, store.PinRecord{
 							Ref: r.Ref, IndexDigest: pin.IndexDigest, MediaType: pin.MediaType,
-							Arches: pin.Arches, Source: "file:" + tgt.Name, ComposePath: tgt.Path,
+							Arches: pin.Arches, Source: string(tgt.Kind) + ":" + tgt.Name, ComposePath: tgt.Path,
 							BackupPath: applied.BackupPath, Service: r.Service, CanaryState: "candidate",
 						})
 					}

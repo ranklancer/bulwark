@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/capture"
 	"github.com/bulwark-docker/bulwark/internal/config"
@@ -212,6 +213,12 @@ func canaryRollback(args []string, stdout, stderr io.Writer) error {
 	}
 	if rec.CanaryState == store.CanaryRolledBack {
 		return fmt.Errorf("canary rollback %s: already rolled back", key)
+	}
+	// API/DB-managed pins (e.g. Portainer) have NO file backup and cannot be
+	// auto-rolled-back by restoring a compose file. Surface this loudly and
+	// refuse — bulwark must never report a false "rolled back" for a managed pin.
+	if strings.HasPrefix(rec.Source, string(capture.KindManaged)+":") {
+		return fmt.Errorf("canary rollback %s: MANUAL ROLLBACK REQUIRED — this is an API/DB-managed pin (%s) with no file backup. Roll it back through the orchestrator (re-pin the previous digest, or redeploy the prior stack). Bulwark does not auto-roll-back managed pins", key, rec.Source)
 	}
 	if rec.BackupPath == "" || rec.ComposePath == "" {
 		return fmt.Errorf("canary rollback %s: no backup/compose path to restore from", key)

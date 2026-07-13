@@ -20,7 +20,8 @@ split via `Kind()`.
    the new content is pushed back via `PUT /api/stacks/{id}`, which redeploys the
    stack. The stack's existing environment is preserved.
 
-**Git-backed stacks are refused.** Their source of truth is the git repo;
+**Git-backed stacks are refused** (detected by a POSITIVE signal — a `GitConfig`
+carrying a repo URL; a present-but-unparseable `GitConfig` fails closed to git). Their source of truth is the git repo;
 overwriting via the API would fight it. Bulwark reports them and pins nothing —
 pin such stacks in their git source instead.
 
@@ -37,6 +38,8 @@ sources:
     endpoint_id: 2         # optional: restrict to one Portainer environment
     ca_file: /etc/ssl/portainer-ca.pem   # optional: trust a private issuing CA
     insecure_skip_verify: false          # explicit opt-in only; logs a warning
+    allow_insecure_http: false           # required to use a cleartext http:// base
+                                         # to a NON-loopback host (default: refuse)
 ```
 
 The API key is created in Portainer (user settings → access tokens) and exported
@@ -50,16 +53,37 @@ the `X-API-Key` header and is never logged.
 * **TLS fail-closed by default** — system trust store; a private CA via
   `ca_file`; verification disabled only on explicit `insecure_skip_verify`
   (logged), with a TLS 1.2 floor. Same trust model as the Proxmox client.
-* **SSRF guard** — cross-host HTTP redirects are refused, so a hostile/compromised
-  endpoint can't bounce the client at internal services.
+* **SSRF / credential-downgrade guards** —
+  * cross-host HTTP redirects are refused;
+  * **any scheme change on a same-host redirect is refused**, in particular an
+    `https`->`http` downgrade that would re-send the `X-API-Key` over cleartext
+    to the same host;
+  * a **cleartext `http://` base URL to a non-loopback host is refused** unless
+    `allow_insecure_http: true` (loopback is allowed); and
+  * the dialer **rejects link-local / multicast / unspecified connect IPs** after
+    DNS resolution (e.g. `169.254.169.254` cloud metadata), which contains
+    DNS-rebinding SSRF to those targets. Loopback and RFC1918 remain allowed —
+    self-hosted Portainer commonly lives there. **Residual:** the endpoint is
+    operator-configured, so a fully-hostile DNS rebind to a *public* internal
+    host is out of scope of these controls; keep the endpoint trusted.
 * **Drift-checked writes** — the compose text is re-fetched at apply time and the
   splice refuses if the target image line changed since propose.
 * **Untrusted-input parsing** (compose text from the API/DB) is fuzzed.
 * **Dry-run by default**; ambiguous cases (git-backed stacks) are reported, never
   blind-written.
 
-## Limitations (current)
+## Managed rollback
 
-Managed rollback is not yet wired into the canary rollback path (which is
-file-backup based); Portainer retains prior stack state and a re-pin can restore
-a previous digest. A dedicated managed-rollback path is a follow-up.
+`bulwark canary rollback` **refuses** a managed (Portainer) pin **loudly** with
+`MANUAL ROLLBACK REQUIRED` — it never reports a false "rolled back". Managed pins
+have no file backup; roll one back through the orchestrator (re-pin the previous
+digest, or redeploy the prior stack). Portainer also retains prior stack state.
+
+## ⚠️ Required before production: a live smoke test
+
+This adapter is built to the documented Portainer CE API with fakes, but has not
+been integration-tested against a live instance. Before relying on it, smoke-test
+one non-critical stack end to end and confirm: the stack list / file / `PUT`
+shapes match; a redeploy **preserves the stack environment** (the adapter refuses
+to `PUT` a stack whose fetched `Env` is `nil`, as a guard); and git-backed stacks
+are correctly detected and skipped.

@@ -83,3 +83,30 @@ func TestCmdCanary_Lifecycle(t *testing.T) {
 		t.Errorf("state after rollback = %q, want rolled-back", rec.CanaryState)
 	}
 }
+
+// TestCmdCanary_RollbackRefusesManagedPin: an API/DB-managed pin (no file
+// backup) must be refused with a LOUD "manual rollback required" and must NOT be
+// marked rolled-back (no false success).
+func TestCmdCanary_RollbackRefusesManagedPin(t *testing.T) {
+	dataDir := t.TempDir()
+	ps := store.OpenPinStore(dataDir)
+	key := "portainer-web/web"
+	if err := ps.Set(key, store.PinRecord{
+		Ref: "nginx:1.27", IndexDigest: "sha256:" + strings.Repeat("a", 64),
+		Source: "managed:portainer-web", ComposePath: "7", Service: "web",
+		CanaryState: store.CanaryActive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var out, eb bytes.Buffer
+	err := cmdCanary([]string{"rollback", "--data-dir", dataDir, key}, &out, &eb)
+	if err == nil {
+		t.Fatal("rollback of a managed pin must be refused")
+	}
+	if !strings.Contains(err.Error(), "MANUAL ROLLBACK REQUIRED") {
+		t.Errorf("error must loudly require manual rollback, got: %v", err)
+	}
+	if rec, _ := ps.Get(key); rec.CanaryState == store.CanaryRolledBack {
+		t.Error("a managed pin must NOT be marked rolled-back (false success)")
+	}
+}

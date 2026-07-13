@@ -32,6 +32,8 @@ type SourceConfig struct {
 	// compose file whose stacks bind-mount locates the host stacks root.
 	ExtraRoots    []string `yaml:"extra_roots"`
 	DockgeCompose string   `yaml:"dockge_compose"`
+	// Portainer TLS/transport knobs.
+	AllowInsecureHTTP bool `yaml:"allow_insecure_http"`
 
 	// Portainer / managed adapters (type: portainer) — Endpoint is the API
 	// URL, CredsRef names where the API key lives (env var; never inline), and

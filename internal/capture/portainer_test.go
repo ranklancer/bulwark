@@ -61,7 +61,7 @@ func TestPortainerSource_DiscoverFiltersEndpoint(t *testing.T) {
 
 func TestPortainerSource_WritePinAppliesViaAPI(t *testing.T) {
 	f := newFake()
-	f.stacks[7] = PortainerStack{ID: 7, Name: "web", EndpointID: 1, Type: 2}
+	f.stacks[7] = PortainerStack{ID: 7, Name: "web", EndpointID: 1, Type: 2, Env: []PortainerEnvVar{}}
 	f.files[7] = "services:\n  app:\n    image: nginx:1.27\n"
 	src := &PortainerSource{API: f}
 	tgt := Target{Name: "web", Path: "7", Kind: KindManaged}
@@ -97,7 +97,7 @@ func TestPortainerSource_WritePinRefusesGitStack(t *testing.T) {
 
 func TestPortainerSource_WritePinRefusesOnDrift(t *testing.T) {
 	f := newFake()
-	f.stacks[7] = PortainerStack{ID: 7, Name: "web"}
+	f.stacks[7] = PortainerStack{ID: 7, Name: "web", Env: []PortainerEnvVar{}}
 	f.files[7] = "services:\n  app:\n    image: nginx:1.27\n"
 	prop := Proposal{Path: "7", Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.27@" + digest64("c")}
 	// Someone changed the stack file after the proposal was computed.
@@ -210,5 +210,66 @@ func TestRefuseCrossHostRedirect(t *testing.T) {
 	cross := httptest.NewRequest(http.MethodGet, "https://169.254.169.254/latest", nil)
 	if err := refuseCrossHostRedirect(cross, []*http.Request{orig}); err == nil {
 		t.Error("cross-host redirect must be refused (SSRF guard)")
+	}
+	// HIGH: a same-host https->http downgrade must be refused (credential leak).
+	downgrade := httptest.NewRequest(http.MethodGet, "http://portainer.local/api/stacks", nil)
+	if err := refuseCrossHostRedirect(downgrade, []*http.Request{orig}); err == nil {
+		t.Fatal("https->http same-host downgrade must be refused (X-API-Key would leak over cleartext)")
+	}
+}
+
+func TestNewPortainerClient_CleartextBase(t *testing.T) {
+	if _, err := NewPortainerClient(PortainerConfig{BaseURL: "http://portainer.example:9000", APIKey: "k"}); err == nil {
+		t.Error("cleartext http to a non-loopback host must be refused by default")
+	}
+	if _, err := NewPortainerClient(PortainerConfig{BaseURL: "http://portainer.example:9000", APIKey: "k", AllowInsecureHTTP: true}); err != nil {
+		t.Errorf("explicit AllowInsecureHTTP must permit cleartext http: %v", err)
+	}
+	if _, err := NewPortainerClient(PortainerConfig{BaseURL: "http://127.0.0.1:9000", APIKey: "k"}); err != nil {
+		t.Errorf("cleartext http to loopback must be allowed: %v", err)
+	}
+}
+
+func TestBlockDangerousConnectIP(t *testing.T) {
+	blocked := []string{"169.254.169.254:80", "169.254.169.254:443", "224.0.0.1:53", "0.0.0.0:80"}
+	for _, a := range blocked {
+		if err := blockDangerousConnectIP("tcp", a, nil); err == nil {
+			t.Errorf("connect to %s must be refused (SSRF guard)", a)
+		}
+	}
+	allowed := []string{"127.0.0.1:9443", "192.0.2.10:9443", "10.0.0.5:9443", "192.0.2.10:443"}
+	for _, a := range allowed {
+		if err := blockDangerousConnectIP("tcp", a, nil); err != nil {
+			t.Errorf("connect to %s must be allowed: %v", a, err)
+		}
+	}
+}
+
+func TestGitConfigHasRepo(t *testing.T) {
+	raw := func(x string) *json.RawMessage { m := json.RawMessage(x); return &m }
+	if gitConfigHasRepo(nil) {
+		t.Error("nil GitConfig is not git-managed")
+	}
+	if !gitConfigHasRepo(raw(`{"URL":"https://example/repo"}`)) {
+		t.Error("GitConfig with a repo URL is git-managed")
+	}
+	if gitConfigHasRepo(raw(`{}`)) {
+		t.Error("empty GitConfig object (no URL) is not git-managed")
+	}
+	if !gitConfigHasRepo(raw(`not json`)) {
+		t.Error("unparseable GitConfig must fail closed (treated as git-managed)")
+	}
+}
+
+func TestPortainerSource_WritePinRefusesNilEnv(t *testing.T) {
+	f := newFake()
+	f.stacks[7] = PortainerStack{ID: 7, Name: "web"} // Env is nil (contract mismatch)
+	f.files[7] = "services:\n  app:\n    image: nginx:1.27\n"
+	prop := Proposal{Path: "7", Line: 3, OldValue: "nginx:1.27", NewValue: "nginx:1.27@" + digest64("d")}
+	if _, err := (&PortainerSource{API: f}).WritePin(context.Background(), prop); err == nil {
+		t.Fatal("WritePin must refuse when the fetched stack has a nil Env (would risk clearing env)")
+	}
+	if _, ok := f.updated[7]; ok {
+		t.Fatal("no update must be sent when Env is nil")
 	}
 }
