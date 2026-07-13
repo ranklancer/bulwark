@@ -89,7 +89,7 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 		backup = filepath.Join(*dataDir, "pin-backups")
 	}
 
-	var sources []*capture.ComposeSource
+	var sources []capture.Source
 	switch {
 	case strings.TrimSpace(*stacks) != "":
 		var paths []string
@@ -108,6 +108,8 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 			switch strings.ToLower(strings.TrimSpace(sc.Type)) {
 			case "", "compose":
 				sources = append(sources, &capture.ComposeSource{Paths: sc.Paths, Autodiscover: sc.Autodiscover, BackupDir: bd})
+			case "dockge":
+				sources = append(sources, &capture.DockgeSource{StacksDirs: sc.Paths, Autodetect: sc.Autodiscover, ExtraRoots: sc.ExtraRoots, DockgeCompose: sc.DockgeCompose, BackupDir: bd})
 			default:
 				fmt.Fprintf(stdout, "source %q: type %q not implemented (file-based compose only) — skipping\n", sc.Name, sc.Type)
 			}
