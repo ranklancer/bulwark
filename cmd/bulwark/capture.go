@@ -110,6 +110,23 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 				sources = append(sources, &capture.ComposeSource{Paths: sc.Paths, Autodiscover: sc.Autodiscover, BackupDir: bd})
 			case "dockge":
 				sources = append(sources, &capture.DockgeSource{StacksDirs: sc.Paths, Autodetect: sc.Autodiscover, ExtraRoots: sc.ExtraRoots, DockgeCompose: sc.DockgeCompose, BackupDir: bd})
+			case "portainer":
+				// The API key is read from the env var named by creds_ref — the secret
+				// is never stored inline in config.
+				apiKey := os.Getenv(sc.CredsRef)
+				if strings.TrimSpace(apiKey) == "" {
+					fmt.Fprintf(stdout, "source %q: portainer creds_ref env %q is empty — skipping\n", sc.Name, sc.CredsRef)
+					continue
+				}
+				pc, err := capture.NewPortainerClient(capture.PortainerConfig{
+					BaseURL: sc.Endpoint, APIKey: apiKey, CAFile: sc.CAFile, InsecureSkipVerify: sc.InsecureSkipVerify,
+					AllowInsecureHTTP: sc.AllowInsecureHTTP,
+				})
+				if err != nil {
+					fmt.Fprintf(stdout, "source %q: portainer client: %v — skipping\n", sc.Name, err)
+					continue
+				}
+				sources = append(sources, &capture.PortainerSource{API: pc, EndpointID: sc.EndpointID})
 			default:
 				fmt.Fprintf(stdout, "source %q: type %q not implemented (file-based compose only) — skipping\n", sc.Name, sc.Type)
 			}
@@ -199,7 +216,7 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 					if pins != nil {
 						_ = pins.Set(tgt.Name+"/"+r.Service, store.PinRecord{
 							Ref: r.Ref, IndexDigest: pin.IndexDigest, MediaType: pin.MediaType,
-							Arches: pin.Arches, Source: "file:" + tgt.Name, ComposePath: tgt.Path,
+							Arches: pin.Arches, Source: string(tgt.Kind) + ":" + tgt.Name, ComposePath: tgt.Path,
 							BackupPath: applied.BackupPath, Service: r.Service, CanaryState: "candidate",
 						})
 					}

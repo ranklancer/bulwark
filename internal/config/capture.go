@@ -32,6 +32,15 @@ type SourceConfig struct {
 	// compose file whose stacks bind-mount locates the host stacks root.
 	ExtraRoots    []string `yaml:"extra_roots"`
 	DockgeCompose string   `yaml:"dockge_compose"`
+	// Portainer TLS/transport knobs.
+	AllowInsecureHTTP bool `yaml:"allow_insecure_http"`
+
+	// Portainer / managed adapters (type: portainer) — Endpoint is the API
+	// URL, CredsRef names where the API key lives (env var; never inline), and
+	// EndpointID optionally restricts discovery to one Portainer environment.
+	EndpointID         int    `yaml:"endpoint_id"`
+	CAFile             string `yaml:"ca_file"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
 }
 
 // validateCapture checks the capture/sources block. No-op when unset.
@@ -60,7 +69,14 @@ func (c *Config) validateCapture() error {
 			if len(src.Paths) == 0 && !src.Autodiscover {
 				return fmt.Errorf("sources[%q]: a dockge source needs paths (stacks roots) or autodiscover: true", name)
 			}
-		case "portainer", "ix-apps", "komodo", "swarm":
+		case "portainer":
+			if strings.TrimSpace(src.Endpoint) == "" {
+				return fmt.Errorf("sources[%q]: a portainer source needs endpoint (the Portainer API URL)", name)
+			}
+			if strings.TrimSpace(src.CredsRef) == "" {
+				return fmt.Errorf("sources[%q]: a portainer source needs creds_ref (names where the API key lives; never inline the secret)", name)
+			}
+		case "ix-apps", "komodo", "swarm":
 			return fmt.Errorf("sources[%q]: type %q is a managed backend not yet implemented (digest pinning ships the file-based compose adapter only)", name, strings.ToLower(src.Type))
 		default:
 			return fmt.Errorf("sources[%q]: unknown type %q", name, src.Type)

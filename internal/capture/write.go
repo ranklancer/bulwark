@@ -41,34 +41,20 @@ func (s *ComposeSource) WritePin(_ context.Context, p Proposal) (Applied, error)
 	if err != nil {
 		return res, fmt.Errorf("capture: read %s: %w", p.Path, err)
 	}
-	// SplitAfter keeps line terminators, so a plain join is byte-identical.
-	parts := strings.SplitAfter(string(data), "\n")
-	idx := p.Line - 1
-	if idx < 0 || idx >= len(parts) {
-		return res, fmt.Errorf("capture: %s: line %d out of range — file changed since propose", p.Path, p.Line)
+	newContent, noOp, err := spliceImageValue(string(data), p.Line, p.OldValue, p.NewValue)
+	if err != nil {
+		return res, fmt.Errorf("capture: %s: %w", p.Path, err)
 	}
-	orig := parts[idx]
-	keyIdx := strings.Index(orig, "image:")
-	if keyIdx < 0 {
-		return res, fmt.Errorf("capture: %s line %d is no longer an image: line — file changed since propose", p.Path, p.Line)
-	}
-	after := orig[keyIdx+len("image:"):]
-	if strings.Contains(after, p.NewValue) {
-		res.NoOp = true // already pinned to this exact digest
+	if noOp {
+		res.NoOp = true
 		return res, nil
 	}
-	vIdx := strings.Index(after, p.OldValue)
-	if vIdx < 0 {
-		return res, fmt.Errorf("capture: %s line %d no longer contains %q — refusing (file changed since propose)", p.Path, p.Line, p.OldValue)
-	}
-	parts[idx] = orig[:keyIdx+len("image:")] + after[:vIdx] + p.NewValue + after[vIdx+len(p.OldValue):]
-
 	backupPath, err := s.backup(p.Path, data)
 	if err != nil {
 		return res, err
 	}
 	res.BackupPath = backupPath
-	if err := atomicWrite(p.Path, strings.Join(parts, "")); err != nil {
+	if err := atomicWrite(p.Path, newContent); err != nil {
 		return res, err
 	}
 	return res, nil
@@ -130,4 +116,37 @@ func atomicWrite(path, content string) error {
 		return fmt.Errorf("capture: rename temp over %s: %w", path, err)
 	}
 	return nil
+}
+
+// spliceImageValue replaces oldValue with newValue in the "image:" scalar on
+// 1-based line lineNo of content, preserving every other byte (indentation,
+// quotes, comments, line terminators). It is the single splice implementation
+// shared by every write path — file adapters and API/DB-managed adapters — so
+// the format-preserving, drift-checked edit can never diverge between them.
+//
+// Returns (newContent, noOp, err). noOp is true when the line already carries
+// newValue (idempotent). It is fail-closed on drift: the target line must still
+// be an image: line that contains oldValue, else an error is returned and
+// nothing is spliced.
+func spliceImageValue(content string, lineNo int, oldValue, newValue string) (string, bool, error) {
+	parts := strings.SplitAfter(content, "\n")
+	idx := lineNo - 1
+	if idx < 0 || idx >= len(parts) {
+		return "", false, fmt.Errorf("line %d out of range — content changed since propose", lineNo)
+	}
+	orig := parts[idx]
+	keyIdx := strings.Index(orig, "image:")
+	if keyIdx < 0 {
+		return "", false, fmt.Errorf("line %d is no longer an image: line — content changed since propose", lineNo)
+	}
+	after := orig[keyIdx+len("image:"):]
+	if strings.Contains(after, newValue) {
+		return content, true, nil // already pinned to this exact value
+	}
+	vIdx := strings.Index(after, oldValue)
+	if vIdx < 0 {
+		return "", false, fmt.Errorf("line %d no longer contains %q — refusing (content changed since propose)", lineNo, oldValue)
+	}
+	parts[idx] = orig[:keyIdx+len("image:")] + after[:vIdx] + newValue + after[vIdx+len(oldValue):]
+	return strings.Join(parts, ""), false, nil
 }

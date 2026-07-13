@@ -7,6 +7,7 @@
 #   0.0.0.0, 127.0.0.0/8 (loopback), 255.255.255.255 (broadcast),
 #   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16 (RFC 1918 private),
 #   192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 (RFC 5737 documentation),
+#   169.254.0.0/16 (RFC 3927 link-local),
 #   224.0.0.0/4, 240.0.0.0/4 (multicast / future use).
 #
 # Runs as a CI step and as a pre-commit hook (see scripts/install-hooks.sh).
@@ -51,6 +52,7 @@ if [[ -n "$ipv4_findings" ]]; then
         if (p[1] == 198 && p[2] == 51 && p[3] == 100) return 1;
         if (p[1] == 203 && p[2] == 0 && p[3] == 113) return 1;
         if (p[1] == 172 && p[2] >= 16 && p[2] <= 31) return 1;
+        if (p[1] == 169 && p[2] == 254) return 1; # RFC 3927 link-local
         if (p[1] >= 224 && p[1] <= 255) return 1;
         return 0;
     }
