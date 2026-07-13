@@ -2,20 +2,15 @@ package capture
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -190,21 +185,12 @@ func NewPortainerClient(cfg PortainerConfig) (PortainerAPI, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, errors.New("portainer: api key is required (configure a creds_ref; never inline the secret)")
 	}
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	// Cleartext base URL: the X-API-Key would travel unencrypted. Refuse for a
-	// non-loopback host unless the operator explicitly opts in (loopback is safe).
-	if u.Scheme == "http" && !isLoopbackHost(u.Hostname()) {
-		if !cfg.AllowInsecureHTTP {
-			return nil, fmt.Errorf("portainer: refusing a cleartext http:// base URL to non-loopback host %q — the API key would be sent unencrypted; use https, or set allow_insecure_http: true to override", u.Host)
-		}
-		logger.Warn("portainer: cleartext http base URL in use; the API key is sent unencrypted", "host", u.Host)
+	if err := checkCleartextBase("portainer", u, cfg.AllowInsecureHTTP, cfg.Logger); err != nil {
+		return nil, err
 	}
 	hc := cfg.HTTPClient
 	if hc == nil {
-		tlsCfg, err := portainerTLSConfig(cfg)
+		tlsCfg, err := managedTLSConfig("portainer", cfg.InsecureSkipVerify, cfg.CAFile, cfg.Logger)
 		if err != nil {
 			return nil, err
 		}
@@ -215,100 +201,6 @@ func NewPortainerClient(cfg PortainerConfig) (PortainerAPI, error) {
 		}
 	}
 	return &httpPortainerClient{base: base, apiKey: cfg.APIKey, hc: hc}, nil
-}
-
-// portainerTLSConfig builds a fail-closed-by-default TLS config (TLS 1.2+),
-// mirroring the proxmox trust model: system store by default; a private CA via
-// CAFile; verification disabled only on explicit InsecureSkipVerify (logged).
-func portainerTLSConfig(cfg PortainerConfig) (*tls.Config, error) {
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-	c := &tls.Config{MinVersion: tls.VersionTLS12}
-	switch {
-	case cfg.InsecureSkipVerify:
-		logger.Warn("portainer: TLS certificate verification DISABLED (insecure_skip_verify); prefer ca_file")
-		c.InsecureSkipVerify = true // #nosec G402 -- explicit operator opt-in, off by default, logged
-	case strings.TrimSpace(cfg.CAFile) != "":
-		pem, err := os.ReadFile(cfg.CAFile) // #nosec G304 -- operator-configured CA bundle path
-		if err != nil {
-			return nil, fmt.Errorf("portainer: read ca_file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(pem) {
-			return nil, fmt.Errorf("portainer: ca_file %s contained no valid PEM certificates", cfg.CAFile)
-		}
-		c.RootCAs = pool
-	}
-	return c, nil
-}
-
-// refuseCrossHostRedirect blocks a redirect to a different host — an SSRF guard
-// so a compromised/hostile endpoint can't bounce us at internal services.
-func refuseCrossHostRedirect(req *http.Request, via []*http.Request) error {
-	if len(via) == 0 {
-		return nil
-	}
-	orig := via[0].URL
-	if req.URL.Host != orig.Host {
-		return fmt.Errorf("portainer: refusing cross-host redirect to %q", req.URL.Host)
-	}
-	// Refuse ANY scheme change on a same-host redirect. In particular this blocks
-	// an https->http downgrade, which would re-send the X-API-Key over cleartext
-	// to the same host — exactly the leak the cross-host guard alone misses.
-	if req.URL.Scheme != orig.Scheme {
-		return fmt.Errorf("portainer: refusing redirect changing scheme %q->%q (credential-downgrade guard)", orig.Scheme, req.URL.Scheme)
-	}
-	if len(via) >= 10 {
-		return errors.New("portainer: too many redirects")
-	}
-	return nil
-}
-
-// isLoopbackHost reports whether host is localhost or a loopback IP literal.
-func isLoopbackHost(host string) bool {
-	host = strings.TrimSpace(host)
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
-}
-
-// guardedTransport builds an http.Transport whose dialer rejects link-local,
-// multicast and unspecified connect IPs after DNS resolution. This contains
-// DNS-rebinding SSRF to those targets (e.g. 169.254.169.254 cloud metadata),
-// which are never a legitimate Portainer host. Loopback and RFC1918 are allowed
-// on purpose: self-hosted Portainer commonly lives on a private/loopback address.
-func guardedTransport(tlsCfg *tls.Config) *http.Transport {
-	d := &net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second, Control: blockDangerousConnectIP}
-	return &http.Transport{
-		TLSClientConfig:       tlsCfg,
-		DialContext:           d.DialContext,
-		MaxIdleConns:          10,
-		IdleConnTimeout:       90 * time.Second,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
-}
-
-// blockDangerousConnectIP runs on the resolved IP just before connect.
-func blockDangerousConnectIP(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		host = address
-	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil
-	}
-	if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
-		return fmt.Errorf("portainer: refusing to connect to disallowed address %s (SSRF guard: link-local/multicast/unspecified)", ip)
-	}
-	return nil
 }
 
 func (c *httpPortainerClient) ListStacks(ctx context.Context) ([]PortainerStack, error) {

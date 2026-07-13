@@ -16,7 +16,7 @@ type CaptureConfig struct {
 
 // SourceConfig declares one container-management backend to capture from. Only
 // the file-based "compose" type is implemented in digest pinning; managed backends
-// (portainer/ix-apps/komodo/swarm) are recognised by the validator but rejected
+// (ix-apps/swarm) are recognised by the validator but rejected
 // until their adapter ships, so a config can be forward-declared safely.
 type SourceConfig struct {
 	Name         string   `yaml:"name"`
@@ -76,7 +76,14 @@ func (c *Config) validateCapture() error {
 			if strings.TrimSpace(src.CredsRef) == "" {
 				return fmt.Errorf("sources[%q]: a portainer source needs creds_ref (names where the API key lives; never inline the secret)", name)
 			}
-		case "ix-apps", "komodo", "swarm":
+		case "komodo":
+			if strings.TrimSpace(src.Endpoint) == "" {
+				return fmt.Errorf("sources[%q]: a komodo source needs endpoint (the Komodo API URL)", name)
+			}
+			if strings.TrimSpace(src.CredsRef) == "" {
+				return fmt.Errorf("sources[%q]: a komodo source needs creds_ref (names the env var holding \"key:secret\"; never inline the secret)", name)
+			}
+		case "ix-apps", "swarm":
 			return fmt.Errorf("sources[%q]: type %q is a managed backend not yet implemented (digest pinning ships the file-based compose adapter only)", name, strings.ToLower(src.Type))
 		default:
 			return fmt.Errorf("sources[%q]: unknown type %q", name, src.Type)
