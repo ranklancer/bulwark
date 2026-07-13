@@ -100,7 +100,7 @@ services:
 
 secrets:
   diun_token:
-    file: /mnt/SSDs/docker-secrets/bulwark/diun_token   # host-side, chmod 600
+    file: /srv/docker-secrets/bulwark/diun_token   # host-side, chmod 600
 ```
 
 ### 4.2 A `${VAR}` field sourced from a file
@@ -128,7 +128,7 @@ is unnecessary. The migration is a clean repoint:
 - The stack sets `BULWARK_DIUN_TOKEN_FILE=/run/secrets/diun_token` and mounts
   the Docker secret, as in section 4.1.
 - The secret **file** is still provisioned host-side at
-  `/mnt/SSDs/docker-secrets/bulwark/diun_token` through the sanctioned
+  `/srv/docker-secrets/bulwark/diun_token` through the sanctioned
   `*-secret-bootstrap` Dockge-stack pattern. That provisioning is unchanged;
   only the consumer changes from "wrapper exports the value" to "Bulwark reads
   the file natively."

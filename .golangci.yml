@@ -22,7 +22,7 @@ linters:
     - noctx         # HTTP requests carry a context
     - goimports     # import grouping + formatting
     - gofmt         # canonical formatting (mirrors `make fmt`)
-  # Parked pending ranklancer's review (each surfaces a judgment call, not a
+  # Parked pending maintainer review (each surfaces a judgment call, not a
   # mechanical fix — see internal engineering notes "Pipeline hardening — golangci-lint
   # adoption notes"):
   #   - misspell : the codebase uses British English deliberately (honour,
