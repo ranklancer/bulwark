@@ -215,3 +215,90 @@ func TestDockgeSource_AutodetectFromComposeMount(t *testing.T) {
 		t.Fatalf("autodetect from a relative Dockge bind-mount must find stacks; got %v", got)
 	}
 }
+
+// TestDockgeSource_WritePinRefusesSymlinkSwapAfterDiscover is the TOCTOU guard:
+// the compose file is swapped to an out-of-root symlink AFTER Discover/Propose
+// but BEFORE WritePin. The write must be refused and the out-of-root file left
+// untouched.
+func TestDockgeSource_WritePinRefusesSymlinkSwapAfterDiscover(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	p := writeStack(t, root, "web", "nginx:1.27")
+	src := &DockgeSource{StacksDirs: []string{root}}
+	targets := mustDiscover(t, src)
+	if len(targets) != 1 {
+		t.Fatalf("want 1 target, got %d", len(targets))
+	}
+	refs, err := src.LocateImageRefs(context.Background(), targets[0])
+	if err != nil || len(refs) != 1 {
+		t.Fatalf("locate: err=%v refs=%d", err, len(refs))
+	}
+	digest := "sha256:" + strings.Repeat("a", 64)
+	prop, err := src.ProposePin(context.Background(), targets[0], refs[0], Pin{IndexDigest: digest, IsIndex: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outFile := filepath.Join(outside, "compose.yaml")
+	if err := os.WriteFile(outFile, []byte("services:\n  x:\n    image: nginx:1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outFile, p); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	before, _ := os.ReadFile(outFile)
+	if _, err := src.WritePin(context.Background(), prop); err == nil {
+		t.Fatal("WritePin must refuse a compose file swapped to an out-of-root symlink after Discover")
+	}
+	after, _ := os.ReadFile(outFile)
+	if string(before) != string(after) {
+		t.Fatal("the out-of-root target must not be modified")
+	}
+}
+
+// TestDockgeSource_WritePinRefusesIntermediateSymlinkSwap swaps an INTERMEDIATE
+// directory component (the stack dir) to an out-of-root symlink after Discover.
+func TestDockgeSource_WritePinRefusesIntermediateSymlinkSwap(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	writeStack(t, root, "web", "nginx:1.27")
+	src := &DockgeSource{StacksDirs: []string{root}}
+	targets := mustDiscover(t, src)
+	refs, _ := src.LocateImageRefs(context.Background(), targets[0])
+	digest := "sha256:" + strings.Repeat("b", 64)
+	prop, err := src.ProposePin(context.Background(), targets[0], refs[0], Pin{IndexDigest: digest, IsIndex: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outDir := filepath.Join(outside, "web")
+	os.MkdirAll(outDir, 0o750)
+	os.WriteFile(filepath.Join(outDir, "compose.yaml"), []byte("services:\n  x:\n    image: nginx:1.27\n"), 0o644)
+	os.RemoveAll(filepath.Join(root, "web"))
+	if err := os.Symlink(outDir, filepath.Join(root, "web")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if _, err := src.WritePin(context.Background(), prop); err == nil {
+		t.Fatal("WritePin must refuse when an intermediate dir component is swapped to an out-of-root symlink")
+	}
+}
+
+func TestStacksDirFromDockgeCompose_PrefersDockgeService(t *testing.T) {
+	y := "services:\n" +
+		"  app:\n    image: myapp:1\n    volumes:\n      - /wrong/path:/app/stacks\n" +
+		"  dockge:\n    image: louislam/dockge:1\n    volumes:\n      - /opt/stacks:/app/stacks\n"
+	got, ok := StacksDirFromDockgeCompose([]byte(y))
+	if !ok || got != "/opt/stacks" {
+		t.Fatalf("got (%q,%v), want (/opt/stacks,true) — the dockge service must win", got, ok)
+	}
+}
+
+func TestStacksDirFromDockgeCompose_ExplicitEmptyEnvIsIntentional(t *testing.T) {
+	y := "services:\n  dockge:\n    image: louislam/dockge:1\n" +
+		"    environment:\n      - DOCKGE_STACKS_DIR=\n" +
+		"    volumes:\n      - /opt/stacks:/app/stacks\n"
+	if got, ok := StacksDirFromDockgeCompose([]byte(y)); ok {
+		t.Fatalf("explicit-empty DOCKGE_STACKS_DIR must yield no match, got %q", got)
+	}
+}

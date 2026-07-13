@@ -2,9 +2,11 @@ package capture
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"gopkg.in/yaml.v3"
 )
@@ -72,9 +74,46 @@ func (s *DockgeSource) ProposePin(ctx context.Context, t Target, ref ImageRef, p
 	return s.core().ProposePin(ctx, t, ref, pin)
 }
 
-// WritePin delegates to the shared file core (backup + atomic + rollback).
+// WritePin re-asserts containment at the write boundary before delegating to
+// the shared file core (backup + atomic + rollback). This closes the
+// propose->apply TOCTOU: even if a directory component or the compose file
+// itself is swapped to a symlink after Discover, the target must still resolve
+// inside a configured stacks root, and its final component must not be a
+// symlink (O_NOFOLLOW). A write can never be redirected outside a root.
 func (s *DockgeSource) WritePin(ctx context.Context, p Proposal) (Applied, error) {
+	if p.NoOp {
+		// No file is read or written for a no-op; nothing to guard.
+		return s.core().WritePin(ctx, p)
+	}
+	if !s.pathWithinAnyRoot(p.Path) {
+		return Applied{Path: p.Path}, fmt.Errorf("capture: dockge: refusing to write %q — it no longer resolves inside any configured stacks root", p.Path)
+	}
+	if err := assertNoFinalSymlink(p.Path); err != nil {
+		return Applied{Path: p.Path}, err
+	}
 	return s.core().WritePin(ctx, p)
+}
+
+// pathWithinAnyRoot reports whether path resolves inside at least one configured
+// Dockge stacks root. Fail-closed: false when no root is configured or none
+// contains the (symlink-resolved) path.
+func (s *DockgeSource) pathWithinAnyRoot(path string) bool {
+	for _, root := range s.resolveStacksDirs() {
+		if withinRoot(root, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// assertNoFinalSymlink opens path with O_NOFOLLOW so a final-component symlink
+// (or a missing target) is rejected fail-closed rather than followed.
+func assertNoFinalSymlink(path string) error {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) // #nosec G304 -- path already confirmed within a configured stacks root
+	if err != nil {
+		return fmt.Errorf("capture: dockge: refusing to write %q — O_NOFOLLOW open failed (symlink or missing target): %w", path, err)
+	}
+	return f.Close()
 }
 
 // Discover enumerates Dockge stacks (<root>/<stack>/compose.yaml) across every
@@ -102,18 +141,19 @@ func (s *DockgeSource) Discover(_ context.Context) ([]Target, error) {
 			if f == "" {
 				continue
 			}
-			// Fail-closed containment: the compose file must resolve to a path
-			// that stays within this stacks root. Defends against a symlinked
-			// stack file redirecting a later in-place write outside the root.
-			if !withinRoot(root, f) {
+			// Fail-closed containment: resolve the compose path (following any
+			// symlinks) and require it to stay within this stacks root. Carry the
+			// RESOLVED path forward as Target.Path so the write boundary operates on
+			// a canonical location, not an unresolved one.
+			resolved, err := filepath.EvalSymlinks(f)
+			if err != nil || !withinRoot(root, resolved) {
 				continue
 			}
-			abs, err := filepath.Abs(f)
-			if err != nil || seen[abs] {
+			if seen[resolved] {
 				continue
 			}
-			seen[abs] = true
-			targets = append(targets, Target{Name: e.Name(), Path: abs, Kind: KindFile})
+			seen[resolved] = true
+			targets = append(targets, Target{Name: e.Name(), Path: resolved, Kind: KindFile})
 		}
 	}
 	return targets, nil
@@ -198,19 +238,59 @@ func StacksDirFromDockgeCompose(data []byte) (string, bool) {
 	if services == nil {
 		return "", false
 	}
-	for i := 0; i+1 < len(services.Content); i += 2 {
-		svc := services.Content[i+1]
-		if svc == nil || svc.Kind != yaml.MappingNode {
-			continue
-		}
-		target := dockgeEnvValue(svc, "DOCKGE_STACKS_DIR")
-		if target == "" {
-			target = dockgeContainerStacksDefault
-		}
-		for _, m := range serviceBindMounts(svc) {
-			if strings.TrimSpace(m.source) != "" && pathsEqual(m.target, target) {
-				return strings.TrimSpace(m.source), true
+	// Prefer the service that actually runs Dockge (named "dockge" or using the
+	// Dockge image) so a co-located service with a similar mount cannot shadow
+	// it; fall back to any service that declares a matching mount.
+	var fallback string
+	haveFallback := false
+	for pass := 0; pass < 2; pass++ {
+		for i := 0; i+1 < len(services.Content); i += 2 {
+			name := services.Content[i].Value
+			svc := services.Content[i+1]
+			if svc == nil || svc.Kind != yaml.MappingNode {
+				continue
 			}
+			if pass == 0 && !isDockgeService(name, svc) {
+				continue
+			}
+			dir, ok := stacksDirFromService(svc)
+			if !ok {
+				continue
+			}
+			if pass == 0 {
+				return dir, true
+			}
+			if !haveFallback {
+				fallback, haveFallback = dir, true
+			}
+		}
+	}
+	return fallback, haveFallback
+}
+
+// isDockgeService reports whether a compose service is the one running Dockge
+// itself (named "dockge" or using an image whose name contains "dockge").
+func isDockgeService(name string, svc *yaml.Node) bool {
+	if strings.EqualFold(strings.TrimSpace(name), "dockge") {
+		return true
+	}
+	return strings.Contains(strings.ToLower(scalarField(svc, "image")), "dockge")
+}
+
+// stacksDirFromService extracts the host stacks dir from one service's env +
+// volumes. An explicitly-empty DOCKGE_STACKS_DIR is treated as intentional (the
+// service declares no stacks dir) rather than silently defaulting to /app/stacks.
+func stacksDirFromService(svc *yaml.Node) (string, bool) {
+	target, present := dockgeEnvValue(svc, "DOCKGE_STACKS_DIR")
+	if present && target == "" {
+		return "", false
+	}
+	if !present {
+		target = dockgeContainerStacksDefault
+	}
+	for _, m := range serviceBindMounts(svc) {
+		if strings.TrimSpace(m.source) != "" && pathsEqual(m.target, target) {
+			return strings.TrimSpace(m.source), true
 		}
 	}
 	return "", false
@@ -262,10 +342,10 @@ func parseShortVolume(s string) (bindMount, bool) {
 
 // dockgeEnvValue reads a service environment value, tolerating both the list
 // ("- KEY=VALUE") and mapping ("KEY: VALUE") forms.
-func dockgeEnvValue(svc *yaml.Node, key string) string {
+func dockgeEnvValue(svc *yaml.Node, key string) (value string, present bool) {
 	env := valueNode(svc, "environment")
 	if env == nil {
-		return ""
+		return "", false
 	}
 	switch env.Kind {
 	case yaml.SequenceNode:
@@ -274,15 +354,15 @@ func dockgeEnvValue(svc *yaml.Node, key string) string {
 				continue
 			}
 			if k, v, ok := strings.Cut(e.Value, "="); ok && strings.TrimSpace(k) == key {
-				return strings.TrimSpace(v)
+				return strings.TrimSpace(v), true
 			}
 		}
 	case yaml.MappingNode:
 		if v := valueNode(env, key); v != nil && v.Kind == yaml.ScalarNode {
-			return strings.TrimSpace(v.Value)
+			return strings.TrimSpace(v.Value), true
 		}
 	}
-	return ""
+	return "", false
 }
 
 func scalarField(m *yaml.Node, key string) string {

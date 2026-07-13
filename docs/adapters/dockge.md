@@ -39,9 +39,13 @@ any `extra_roots`. Only existing directories are scanned.
 
 * **Dry-run by default.** `bulwark capture` reports proposed pins; `--apply`
   performs the in-place edit (backup first, atomic rename, rollback recorded).
-* **Fail-closed discovery.** A stack whose compose file resolves (via symlink)
-  outside its stacks root is skipped — a write is never redirected out of the
-  root (path-traversal / symlink-escape guard).
+* **Fail-closed containment, checked at both discovery AND write.** A stack
+  whose compose file resolves (via symlink) outside its stacks root is skipped
+  at discovery; `Target.Path` carries the symlink-resolved path forward; and
+  the write boundary re-asserts containment and opens the target with
+  `O_NOFOLLOW`. So even if a directory component or the compose file is swapped
+  to a symlink between propose and apply (TOCTOU), the write is refused —
+  never redirected out of a configured root.
 * **Digest-only writes.** Only a canonical `sha256:<64-hex>` digest is ever
   spliced into a compose file; malformed digests are refused at multiple layers.
 * **Untrusted-input parsing** (the Dockge-compose stacks-dir locator) is fuzzed.
