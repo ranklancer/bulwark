@@ -152,7 +152,10 @@ Flags:`)
 		defer func() { _ = st.Close() }()
 	}
 
-	cveSource, cveThreshold := buildCVESource(loaded)
+	cveSource, cveThreshold, cveErr := buildCVESource(loaded)
+	if cveErr != nil {
+		return fmt.Errorf("scan: %w", cveErr)
+	}
 	scn := &scanner.Scanner{
 		Docker:       dockerClient,
 		Registry:     regClient,

@@ -296,7 +296,10 @@ Flags:`)
 
 	// CVE/security-urgency source (opt-in via the security block). Built
 	// once; nil + no-op when disabled.
-	cveSource, cveThreshold := buildCVESource(loaded)
+	cveSource, cveThreshold, cveErr := buildCVESource(loaded)
+	if cveErr != nil {
+		return fmt.Errorf("run: %w", cveErr)
+	}
 
 	// Shared metrics instance so scan/apply/verdict counters and the HTTP
 	// /metrics endpoint observe the same counters.

@@ -44,7 +44,10 @@ func buildVerifyGate(cfg *config.Config) (*verify.Gate, error) {
 	if err != nil {
 		return nil, err
 	}
-	src, _ := buildCVESource(cfg)
+	src, _, cveErr := buildCVESource(cfg)
+	if cveErr != nil {
+		return nil, cveErr
+	}
 	prov, err := cfg.ProvenanceVerifier()
 	if err != nil {
 		return nil, err

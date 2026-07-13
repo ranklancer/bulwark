@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log/slog"
+	"fmt"
 	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/config"
@@ -18,9 +18,9 @@ import (
 // no-op. Config validation (validateSecurity) rejects a malformed backend at
 // startup; here we additionally fail safe to "no axis" rather than crash a scan
 // loop if construction ever errors.
-func buildCVESource(cfg *config.Config) (cve.Source, cve.Severity) {
+func buildCVESource(cfg *config.Config) (cve.Source, cve.Severity, error) {
 	if cfg == nil || !cfg.Security.Enabled {
-		return nil, cve.SeverityUnknown
+		return nil, cve.SeverityUnknown, nil
 	}
 	threshold := cve.SeverityCritical
 	if strings.EqualFold(strings.TrimSpace(cfg.Security.SeverityThreshold), "high") {
@@ -40,15 +40,19 @@ func buildCVESource(cfg *config.Config) (cve.Source, cve.Severity) {
 		reportDir, serverURL = c.Grype.ReportDir, c.Grype.ServerURL
 	}
 	// Preserve the "silently off when unconfigured" behaviour: a trivy/grype
-	// type with no report_dir (or server_url) leaves the axis inert.
+	// type with no report_dir (or server_url) leaves the axis inert. This is a
+	// deliberate no-op, not a misconfiguration.
 	if strings.TrimSpace(reportDir) == "" && strings.TrimSpace(serverURL) == "" {
-		return nil, threshold
+		return nil, threshold, nil
 	}
 
 	src, err := cve.NewScanSource(cve.ScanSourceSpec{Provider: provider, ReportDir: reportDir, ServerURL: serverURL})
 	if err != nil {
-		slog.Warn("cve: scan source unavailable; vulnerability axis disabled", "provider", provider, "err", err)
-		return nil, threshold
+		// Fail closed: security is enabled and a backend IS configured, but it
+		// cannot be built. Do NOT silently disable the vulnerability axis — that
+		// would admit images through a gate the operator believes is active.
+		// Surface the error so the daemon/CLI fails at startup.
+		return nil, threshold, fmt.Errorf("cve: security.enabled but scan source %q could not be built: %w", provider, err)
 	}
-	return src, threshold
+	return src, threshold, nil
 }
