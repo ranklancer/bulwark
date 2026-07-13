@@ -111,7 +111,7 @@ func (s *DockgeSource) pathWithinAnyRoot(path string) bool {
 func assertNoFinalSymlink(path string) error {
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0) // #nosec G304 -- path already confirmed within a configured stacks root
 	if err != nil {
-		return fmt.Errorf("capture: dockge: refusing to write %q — O_NOFOLLOW open failed (symlink or missing target): %w", path, err)
+		return fmt.Errorf("capture: refusing to write %q — O_NOFOLLOW open failed (symlink or missing target): %w", path, err)
 	}
 	return f.Close()
 }

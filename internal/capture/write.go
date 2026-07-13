@@ -129,17 +129,25 @@ func atomicWrite(path, content string) error {
 // be an image: line that contains oldValue, else an error is returned and
 // nothing is spliced.
 func spliceImageValue(content string, lineNo int, oldValue, newValue string) (string, bool, error) {
+	return spliceValueOnLine(content, lineNo, "image:", oldValue, newValue)
+}
+
+// spliceValueOnLine replaces oldValue with newValue in the scalar that follows
+// key on 1-based line lineNo of content, preserving every other byte. It is the
+// single, format-agnostic splice shared by every write path (compose "image:",
+// quadlet "Image=", …) so the drift-checked edit can never diverge between them.
+func spliceValueOnLine(content string, lineNo int, key, oldValue, newValue string) (string, bool, error) {
 	parts := strings.SplitAfter(content, "\n")
 	idx := lineNo - 1
 	if idx < 0 || idx >= len(parts) {
 		return "", false, fmt.Errorf("line %d out of range — content changed since propose", lineNo)
 	}
 	orig := parts[idx]
-	keyIdx := strings.Index(orig, "image:")
+	keyIdx := strings.Index(orig, key)
 	if keyIdx < 0 {
-		return "", false, fmt.Errorf("line %d is no longer an image: line — content changed since propose", lineNo)
+		return "", false, fmt.Errorf("line %d is no longer a %s line — content changed since propose", lineNo, strings.TrimRight(key, ":="))
 	}
-	after := orig[keyIdx+len("image:"):]
+	after := orig[keyIdx+len(key):]
 	if strings.Contains(after, newValue) {
 		return content, true, nil // already pinned to this exact value
 	}
@@ -147,6 +155,6 @@ func spliceImageValue(content string, lineNo int, oldValue, newValue string) (st
 	if vIdx < 0 {
 		return "", false, fmt.Errorf("line %d no longer contains %q — refusing (content changed since propose)", lineNo, oldValue)
 	}
-	parts[idx] = orig[:keyIdx+len("image:")] + after[:vIdx] + newValue + after[vIdx+len(oldValue):]
+	parts[idx] = orig[:keyIdx+len(key)] + after[:vIdx] + newValue + after[vIdx+len(oldValue):]
 	return strings.Join(parts, ""), false, nil
 }
