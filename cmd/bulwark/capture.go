@@ -145,6 +145,8 @@ func cmdCaptureWith(args []string, stdout, stderr io.Writer, resolve pinResolver
 					continue
 				}
 				sources = append(sources, &capture.KomodoSource{API: kc})
+			case "podman-quadlet":
+				sources = append(sources, &capture.QuadletSource{UnitDirs: sc.Paths, Autodetect: sc.Autodiscover, ExtraRoots: sc.ExtraRoots, BackupDir: bd})
 			default:
 				fmt.Fprintf(stdout, "source %q: type %q not implemented (file-based compose only) — skipping\n", sc.Name, sc.Type)
 			}

@@ -83,6 +83,10 @@ func (c *Config) validateCapture() error {
 			if strings.TrimSpace(src.CredsRef) == "" {
 				return fmt.Errorf("sources[%q]: a komodo source needs creds_ref (names the env var holding \"key:secret\"; never inline the secret)", name)
 			}
+		case "podman-quadlet":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: a podman-quadlet source needs paths (quadlet unit dirs) or autodiscover: true", name)
+			}
 		case "ix-apps", "swarm":
 			return fmt.Errorf("sources[%q]: type %q is a managed backend not yet implemented (digest pinning ships the file-based compose adapter only)", name, strings.ToLower(src.Type))
 		default:
