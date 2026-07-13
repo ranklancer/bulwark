@@ -87,6 +87,10 @@ func (c *Config) validateCapture() error {
 			if len(src.Paths) == 0 && !src.Autodiscover {
 				return fmt.Errorf("sources[%q]: a podman-quadlet source needs paths (quadlet unit dirs) or autodiscover: true", name)
 			}
+		case "unraid":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: an unraid source needs paths (template dirs) or autodiscover: true", name)
+			}
 		case "ix-apps", "swarm":
 			return fmt.Errorf("sources[%q]: type %q is a managed backend not yet implemented (digest pinning ships the file-based compose adapter only)", name, strings.ToLower(src.Type))
 		default:
