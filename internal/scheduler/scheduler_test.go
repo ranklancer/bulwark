@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+// tickerReturning builds a newTicker override handing back a fixed channel so
+// the interval-driven tests are deterministic (no wall-clock dependency): the
+// test either feeds ticks explicitly or never feeds them to keep the loop parked.
+func tickerReturning(ch <-chan time.Time) func(time.Duration) (<-chan time.Time, func()) {
+	return func(time.Duration) (<-chan time.Time, func()) { return ch, func() {} }
+}
+
 func TestScheduler_RunsImmediatelyAndOnInterval(t *testing.T) {
 	// Deterministic: interval ticks are delivered through an injected channel and
 	// the test synchronises on job completion, so there is no wall-clock timing
@@ -68,62 +75,94 @@ func TestScheduler_RunsImmediatelyAndOnInterval(t *testing.T) {
 }
 
 func TestScheduler_NoImmediate(t *testing.T) {
+	// Deterministic: no ticks are ever delivered, so with RunImmediately=false the
+	// job must never run before the first (never-delivered) tick.
+	ticks := make(chan time.Time)
 	var calls int32
 	s := &Scheduler{
-		Interval: 200 * time.Millisecond,
-		Job: func(ctx context.Context) error {
+		Interval:  time.Hour, // > 0 so Run proceeds; newTicker overrides the source
+		newTicker: tickerReturning(ticks),
+		Job: func(_ context.Context) error {
 			atomic.AddInt32(&calls, 1)
 			return nil
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	_ = s.Run(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
 	if got := atomic.LoadInt32(&calls); got != 0 {
-		t.Errorf("RunImmediately=false should not run before first tick; got %d calls", got)
+		t.Errorf("RunImmediately=false must not run before the first tick; got %d calls", got)
 	}
 }
 
 func TestScheduler_StopsOnContextCancel(t *testing.T) {
-	var calls int32
+	ticks := make(chan time.Time)
+	ran := make(chan struct{}, 1)
 	s := &Scheduler{
-		Interval:       10 * time.Millisecond,
+		Interval:       time.Hour,
 		RunImmediately: true,
-		Job: func(ctx context.Context) error {
-			atomic.AddInt32(&calls, 1)
+		newTicker:      tickerReturning(ticks),
+		Job: func(_ context.Context) error {
+			select {
+			case ran <- struct{}{}:
+			default:
+			}
 			return nil
 		},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Run(ctx) }()
-
-	time.Sleep(40 * time.Millisecond)
+	// Immediate run fired and the loop is now parked in its select.
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("immediate run did not fire")
+	}
 	cancel()
-
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("Run returned %v, want context.Canceled", err)
 		}
-	case <-time.After(200 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not return after cancel")
 	}
 }
 
 func TestScheduler_JobErrorIsLoggedNotPropagated(t *testing.T) {
+	ticks := make(chan time.Time)
+	errSig := make(chan struct{}, 1)
 	var jobErrCount int32
 	s := &Scheduler{
-		Interval:       10 * time.Millisecond,
+		Interval:       time.Hour,
 		RunImmediately: true,
-		Job: func(_ context.Context) error {
-			return errors.New("oh no")
+		newTicker:      tickerReturning(ticks),
+		Job:            func(_ context.Context) error { return errors.New("oh no") },
+		OnError: func(_ error) {
+			atomic.AddInt32(&jobErrCount, 1)
+			select {
+			case errSig <- struct{}{}:
+			default:
+			}
 		},
-		OnError: func(_ error) { atomic.AddInt32(&jobErrCount, 1) },
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	_ = s.Run(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
+	select {
+	case <-errSig:
+	case <-time.After(2 * time.Second):
+		t.Fatal("OnError was never invoked for a failing job")
+	}
+	cancel()
+	<-done
 	if got := atomic.LoadInt32(&jobErrCount); got == 0 {
 		t.Errorf("OnError never invoked; got %d", got)
 	}
@@ -261,17 +300,35 @@ func TestScheduler_NoScheduleIsNoop(t *testing.T) {
 }
 
 func TestScheduler_CanceledJobErrorNotEscalated(t *testing.T) {
+	ticks := make(chan time.Time)
+	ran := make(chan struct{}, 1)
 	var onError int32
 	s := &Scheduler{
-		Interval:       10 * time.Millisecond,
+		Interval:       time.Hour,
 		RunImmediately: true,
-		Job:            func(_ context.Context) error { return context.Canceled },
-		OnError:        func(_ error) { atomic.AddInt32(&onError, 1) },
+		newTicker:      tickerReturning(ticks),
+		Job: func(_ context.Context) error {
+			select {
+			case ran <- struct{}{}:
+			default:
+			}
+			return context.Canceled
+		},
+		OnError: func(_ error) { atomic.AddInt32(&onError, 1) },
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
-	defer cancel()
-	_ = s.Run(ctx)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("immediate run did not fire")
+	}
+	// The immediate invoke completes before Run enters its select; cancel + drain
+	// guarantees it finished, after which OnError must NOT have been called.
+	cancel()
+	<-done
 	if got := atomic.LoadInt32(&onError); got != 0 {
-		t.Errorf("context.Canceled inside job should not trigger OnError; got %d", got)
+		t.Errorf("context.Canceled inside a job must not trigger OnError; got %d", got)
 	}
 }
