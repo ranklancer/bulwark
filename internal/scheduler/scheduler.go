@@ -51,6 +51,11 @@ type Scheduler struct {
 	// on the chan field assignment.
 	reloadOnce sync.Once
 	reloadCh   chan struct{}
+
+	// newTicker builds the fixed-interval tick source. Overrideable in tests to
+	// drive interval ticks deterministically instead of via the wall clock; nil
+	// uses a real time.Ticker. Kept unexported so it is a test-only seam.
+	newTicker func(d time.Duration) (ch <-chan time.Time, stop func())
 }
 
 // reload returns the reload signalling channel, lazy-initialising it
@@ -60,6 +65,18 @@ func (s *Scheduler) reload() chan struct{} {
 		s.reloadCh = make(chan struct{}, 1)
 	})
 	return s.reloadCh
+}
+
+// tickSource returns the fixed-interval tick channel and its stop function.
+// Production uses a real time.Ticker; tests inject newTicker to feed ticks
+// deterministically (a real ticker also silently DROPS ticks when the receiver
+// is slow, which is exactly what made the interval test wall-clock-flaky).
+func (s *Scheduler) tickSource(d time.Duration) (<-chan time.Time, func()) {
+	if s.newTicker != nil {
+		return s.newTicker(d)
+	}
+	t := time.NewTicker(d)
+	return t.C, t.Stop
 }
 
 // SetCron atomically replaces the cron expression the scheduler uses
@@ -125,14 +142,14 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		return s.runCron(ctx, logger, name)
 	}
 
-	ticker := time.NewTicker(s.Interval)
-	defer ticker.Stop()
+	tick, stop := s.tickSource(s.Interval)
+	defer stop()
 	for {
 		select {
 		case <-ctx.Done():
 			logger.Info(name+": stopping", "reason", ctx.Err())
 			return ctx.Err()
-		case <-ticker.C:
+		case <-tick:
 			s.invoke(ctx, logger, name)
 		}
 	}

@@ -9,22 +9,61 @@ import (
 )
 
 func TestScheduler_RunsImmediatelyAndOnInterval(t *testing.T) {
+	// Deterministic: interval ticks are delivered through an injected channel and
+	// the test synchronises on job completion, so there is no wall-clock timing
+	// dependency (the old version relied on a 30ms ticker firing >=2 times inside
+	// a 100ms window, which a real time.Ticker may not do under load — it drops
+	// ticks when the receiver is slow). This asserts both behaviours precisely:
+	// exactly one immediate run at start, then exactly one run per interval tick.
+	ticks := make(chan time.Time)
+	ran := make(chan struct{}, 8)
 	var calls int32
 	s := &Scheduler{
-		Interval:       30 * time.Millisecond,
+		Interval:       time.Hour, // > 0 so Run proceeds; newTicker overrides the source
 		RunImmediately: true,
+		newTicker: func(time.Duration) (<-chan time.Time, func()) {
+			return ticks, func() {}
+		},
 		Job: func(ctx context.Context) error {
 			atomic.AddInt32(&calls, 1)
+			ran <- struct{}{}
 			return nil
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-	_ = s.Run(ctx)
-	// Expect: 1 immediate + at least 2 ticks at 30ms inside a 100ms window.
-	got := atomic.LoadInt32(&calls)
-	if got < 3 {
-		t.Errorf("calls = %d, want >= 3", got)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = s.Run(ctx); close(done) }()
+
+	// 1) Immediate run fires before any interval tick.
+	select {
+	case <-ran:
+	case <-time.After(2 * time.Second):
+		t.Fatal("immediate run did not fire")
+	}
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("after immediate run: calls = %d, want 1", got)
+	}
+
+	// 2) Each delivered tick produces exactly one run (on-interval behaviour).
+	// The unbuffered send blocks until the loop is in its select, so there is no
+	// race and no dropped tick.
+	for want := int32(2); want <= 4; want++ {
+		ticks <- time.Now()
+		select {
+		case <-ran:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("tick did not produce a run (want %d)", want)
+		}
+		if got := atomic.LoadInt32(&calls); got != want {
+			t.Fatalf("after tick: calls = %d, want %d", got, want)
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("scheduler did not stop after context cancel")
 	}
 }
 
