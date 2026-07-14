@@ -214,27 +214,79 @@ func imageRefsFromUnraidBytes(data []byte, service string) ([]ImageRef, error) {
 	const openTag, closeTag = "<Repository>", "</Repository>"
 	sc := bufio.NewScanner(bytes.NewReader(data))
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	inComment := false
 	lineNo := 0
 	for sc.Scan() {
 		lineNo++
 		line := sc.Text()
-		oi := strings.Index(line, openTag)
-		if oi < 0 {
-			continue
+		// The splicer keys on the FIRST literal "<Repository>" on the line, so the
+		// parser only accepts a line whose first occurrence is LIVE (not inside an
+		// XML comment) — parser and splicer agree. A commented-out <Repository>
+		// (full-line, after an unclosed <!-- on the line, or inside a multi-line
+		// comment opened earlier) is skipped, so a real element further down is the
+		// one located and pinned — never the comment (which would be a silent
+		// mis-pin: digest spliced into a comment while the live image stays
+		// unpinned). Attribute/namespaced/CDATA <Repository ...> forms do not match
+		// the literal open tag and are a documented fail-closed limitation.
+		if oi := strings.Index(line, openTag); oi >= 0 && !xmlCommentedAt(line, inComment, oi) {
+			rest := line[oi+len(openTag):]
+			if ci := strings.Index(rest, closeTag); ci >= 0 {
+				if val := strings.TrimSpace(rest[:ci]); val != "" {
+					ir := ImageRef{Service: service, Raw: val, Ref: val, Line: lineNo}
+					ir.Pinnable, ir.Reason = classifyRef(val)
+					return []ImageRef{ir}, nil
+				}
+			}
 		}
-		rest := line[oi+len(openTag):]
-		ci := strings.Index(rest, closeTag)
-		if ci < 0 {
-			// Value spans lines or the tag is malformed: fail-closed, no ref.
-			continue
-		}
-		val := strings.TrimSpace(rest[:ci])
-		if val == "" {
-			continue
-		}
-		ir := ImageRef{Service: service, Raw: val, Ref: val, Line: lineNo}
-		ir.Pinnable, ir.Reason = classifyRef(val)
-		return []ImageRef{ir}, nil
+		inComment = xmlCommentEnd(line, inComment)
 	}
 	return nil, nil
+}
+
+// xmlCommentedAt reports whether byte offset idx on line is inside an XML
+// comment, given the comment state at the start of the line.
+func xmlCommentedAt(line string, inComment bool, idx int) bool {
+	i := 0
+	for i < idx {
+		if inComment {
+			j := strings.Index(line[i:idx], "-->")
+			if j < 0 {
+				return true
+			}
+			i += j + len("-->")
+			inComment = false
+		} else {
+			j := strings.Index(line[i:idx], "<!--")
+			if j < 0 {
+				return false
+			}
+			i += j + len("<!--")
+			inComment = true
+		}
+	}
+	return inComment
+}
+
+// xmlCommentEnd returns the XML-comment state at the end of line, given the
+// state at its start — so a comment opened on one line is still open on the next.
+func xmlCommentEnd(line string, inComment bool) bool {
+	i := 0
+	for i < len(line) {
+		if inComment {
+			j := strings.Index(line[i:], "-->")
+			if j < 0 {
+				return true
+			}
+			i += j + len("-->")
+			inComment = false
+		} else {
+			j := strings.Index(line[i:], "<!--")
+			if j < 0 {
+				return false
+			}
+			i += j + len("<!--")
+			inComment = true
+		}
+	}
+	return inComment
 }

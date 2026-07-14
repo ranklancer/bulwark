@@ -68,8 +68,13 @@ autodetection. Nothing is hardcoded to a specific host.
 - **Digest-only** — a hand-built or drifted proposal whose new value is not a
   canonical `@sha256:` digest is refused; empty `Path`/`Line`/old/new are refused.
 
-The `imageRefsFromUnraidBytes` template parser is fuzzed (never panics on
-untrusted template bytes).
+The parser is **XML-comment aware**: a commented-out `<Repository>` (full-line,
+after an unclosed `<!--` on the line, or inside a multi-line comment) is never
+located, so a digest is never spliced into a comment while the live element
+stays unpinned. Attribute/namespaced/CDATA `<Repository ...>` forms and a
+same-line commented-then-live pair are documented **fail-closed** limitations
+(reported non-pinnable, never mis-pinned). The `imageRefsFromUnraidBytes`
+template parser is fuzzed (never panics on untrusted template bytes).
 
 ## After a pin
 

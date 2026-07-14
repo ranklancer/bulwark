@@ -185,6 +185,34 @@ func TestImageRefsFromUnraidBytes(t *testing.T) {
 	}
 }
 
+func TestImageRefsFromUnraidBytes_Comments(t *testing.T) {
+	// A commented-out <Repository> on an earlier line must NOT be located; the
+	// real element on the later line is the one pinned (else a silent mis-pin).
+	body := "<Container>\n  <!-- <Repository>old:1.0</Repository> -->\n  <Repository>nginx:1.27</Repository>\n</Container>\n"
+	refs, err := imageRefsFromUnraidBytes([]byte(body), "web")
+	if err != nil || len(refs) != 1 || refs[0].Raw != "nginx:1.27" || refs[0].Line != 3 {
+		t.Fatalf("must locate the REAL (line 3) ref, not the comment: %+v (err %v)", refs, err)
+	}
+	// A template whose only <Repository> is commented out yields nil.
+	if r, _ := imageRefsFromUnraidBytes([]byte("<!-- <Repository>x:1</Repository> -->\n"), "web"); r != nil {
+		t.Fatalf("bare-comment template should yield nil, got %+v", r)
+	}
+	// A <Repository> hidden inside a multi-line comment yields nil.
+	if r, _ := imageRefsFromUnraidBytes([]byte("<!--\n<Repository>x:1</Repository>\n-->\n"), "web"); r != nil {
+		t.Fatalf("multi-line-comment repository should yield nil, got %+v", r)
+	}
+	// A commented open tag followed by a live one ON THE SAME LINE is fail-closed
+	// (the splicer targets the first literal occurrence), so nothing is pinned.
+	if r, _ := imageRefsFromUnraidBytes([]byte("<!--<Repository>x</Repository>--><Repository>nginx:1.27</Repository>\n"), "web"); r != nil {
+		t.Fatalf("same-line commented-then-live must be fail-closed nil, got %+v", r)
+	}
+	// Attribute-form <Repository foo="x"> does not match the literal open tag:
+	// documented fail-closed limitation (never mis-pinned).
+	if r, _ := imageRefsFromUnraidBytes([]byte("<Repository foo=\"x\">nginx:1.27</Repository>\n"), "web"); r != nil {
+		t.Fatalf("attribute-form must be fail-closed nil, got %+v", r)
+	}
+}
+
 // mustDiscoverOne is a test helper returning the single discovered target.
 func (s *UnraidSource) mustDiscoverOne(t *testing.T) Target {
 	t.Helper()
