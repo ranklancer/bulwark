@@ -81,7 +81,7 @@ func cmdAdmitWith(args []string, stdout, stderr io.Writer, gate admit.TrustGate)
 		}
 		for _, r := range refs {
 			img := admit.Image{Service: r.Service, Ref: r.Raw}
-			img.Pinned, img.PinnedRef = admitPinState(r, name, pins)
+			img.Pinned, img.PinnedRef, img.PinSource = admitPinState(r, name, pins)
 			images = append(images, img)
 		}
 	}
@@ -100,22 +100,37 @@ func cmdAdmitWith(args []string, stdout, stderr io.Writer, gate admit.TrustGate)
 	return nil
 }
 
-// admitPinState decides whether r is digest-pinned: either the ref already
-// carries an @sha256: digest, or the pin store holds a digest for target/service.
-func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (bool, string) {
-	if at := strings.LastIndex(r.Raw, "@"); at >= 0 && registry.IsSHA256Digest(strings.ToLower(r.Raw[at+1:])) {
-		return true, r.Raw
+// admitPinState decides whether r is digest-pinned and the PROVENANCE of the pin.
+// Precedence: (1) a canonical sha256 digest in the ref AS WRITTEN ("literal");
+// (2) a digest that arrives via ${VAR}/.env expansion — the compose parser resolves
+// it into r.Ref, which is the concrete reference compose would deploy ("var",
+// the admission-gate design Phase 2); (3) a digest recorded by `bulwark capture` under the same
+// stackName(path)/<service> key ("store"). r.Raw is the PRE-expansion literal, so
+// the literal check never mistakes a var-sourced digest for a hard-coded one, and
+// an unresolved ${VAR} (no .env value) yields no digest — read as unpinned.
+func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pinned bool, pinnedRef, source string) {
+	if hasSHA256Digest(r.Raw) {
+		return true, r.Raw, "literal"
+	}
+	if exp := strings.TrimSpace(r.Ref); exp != "" && exp != strings.TrimSpace(r.Raw) && hasSHA256Digest(exp) {
+		return true, exp, "var"
 	}
 	if pins != nil {
 		if rec, ok := pins.Get(target + "/" + r.Service); ok && strings.TrimSpace(rec.IndexDigest) != "" {
 			base := r.Raw
 			if strings.TrimSpace(rec.Ref) != "" {
-				base = rec.Ref
+				base = rec.Ref // the captured repo ref, never a raw ${VAR} literal
 			}
-			return true, base + "@" + rec.IndexDigest
+			return true, base + "@" + rec.IndexDigest, "store"
 		}
 	}
-	return false, r.Raw
+	return false, r.Raw, ""
+}
+
+// hasSHA256Digest reports whether ref carries a canonical @sha256:<64hex> digest.
+func hasSHA256Digest(ref string) bool {
+	at := strings.LastIndex(ref, "@")
+	return at >= 0 && registry.IsSHA256Digest(strings.ToLower(ref[at+1:]))
 }
 
 func admitCountBlocked(v admit.Verdict) int {
@@ -139,6 +154,8 @@ func writeAdmitReport(w io.Writer, v admit.Verdict, format string) error {
 		pin := "pinned"
 		if !im.Pinned {
 			pin = "UNPINNED"
+		} else if im.PinSource != "" && im.PinSource != "literal" {
+			pin = "pinned(" + im.PinSource + ")"
 		}
 		fmt.Fprintf(w, "  [%s] %s (%s) %s\n", strings.ToUpper(string(im.Decision)), im.Service, pin, im.Ref)
 		for _, reason := range im.Reasons {

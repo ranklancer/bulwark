@@ -89,17 +89,19 @@ type Image struct {
 	Ref       string            // the reference as written, e.g. "nginx:1.27" or "...@sha256:..."
 	Pinned    bool              // digest-pinned (ref carries @sha256: OR the pin store holds a digest)
 	PinnedRef string            // the digest-pinned reference handed to the trust engine (== Ref when already pinned)
+	PinSource string            // provenance of the pin: "literal" | "var" (${VAR}/.env-resolved) | "store" | "" (unpinned)
 	Labels    map[string]string // container labels; a valid break-glass lives here (passed to verify)
 }
 
 // ImageResult is the per-image admission outcome.
 type ImageResult struct {
-	Service  string          `json:"service"`
-	Ref      string          `json:"ref"`
-	Pinned   bool            `json:"pinned"`
-	Decision Decision        `json:"decision"`
-	Trust    *verify.Verdict `json:"-"` // in-memory only; never serialized (keeps verifier paths out of machine output)
-	Reasons  []string        `json:"reasons,omitempty"`
+	Service   string          `json:"service"`
+	Ref       string          `json:"ref"`
+	Pinned    bool            `json:"pinned"`
+	PinSource string          `json:"pin_source,omitempty"` // literal | var | store
+	Decision  Decision        `json:"decision"`
+	Trust     *verify.Verdict `json:"-"` // in-memory only; never serialized (keeps verifier paths out of machine output)
+	Reasons   []string        `json:"reasons,omitempty"`
 }
 
 // Verdict is the aggregate admission answer for a deploy target.
@@ -150,7 +152,7 @@ func (e Engine) Admit(ctx context.Context, images []Image) Verdict {
 	agg := DecisionAllow
 	results := make([]ImageResult, 0, len(images))
 	for _, img := range images {
-		r := ImageResult{Service: img.Service, Ref: img.Ref, Pinned: img.Pinned, Decision: DecisionAllow}
+		r := ImageResult{Service: img.Service, Ref: img.Ref, Pinned: img.Pinned, PinSource: img.PinSource, Decision: DecisionAllow}
 
 		if !img.Pinned {
 			switch e.Policy.Pin {

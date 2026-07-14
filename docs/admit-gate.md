@@ -76,3 +76,20 @@ bulwark admit [--config bulwark.yaml] [--data-dir DIR] [--pin-mode off|warn|bloc
   skip the gate (documented residual `T-shim`).
 - Break-glass labels are supported by the engine but not yet extracted from
   compose service labels in Phase 1.
+
+## `${VAR}`-expansion digests (Phase 2)
+
+A digest can arrive through `.env`/`${VAR}` expansion rather than being written
+literally — `image: nginx@${DIGEST}` (with `DIGEST=sha256:…` in a co-located
+`.env`), or a fully var-defined `image: ${IMG}`. admit resolves these the way the
+compose parser does and treats the **resolved digest** as pinned; the trust engine
+verifies that concrete digest. Each image reports its pin provenance —
+`pinned` (literal digest), `pinned(var)` (`.env`/`${VAR}`-resolved), or
+`pinned(store)` (captured by `bulwark capture`); JSON carries `pin_source`.
+
+admit resolves `${VAR}` from the **co-located `.env` only** — a subset of the
+sources `docker compose` uses (it also honours shell env). So admit *under*-resolves
+in the safe direction: an unresolved `${VAR}`, or a var that expands to a tag (no
+digest), reads as **UNPINNED**. Residual `T-env-drift`: a shell override at deploy
+could differ from `.env`; run `admit` in the same environment as `up`, and hard-pin
+the digest for the strongest guarantee. See the admission-gate design §12.

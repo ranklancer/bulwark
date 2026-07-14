@@ -77,7 +77,7 @@ func TestCmdAdmit_NoFile(t *testing.T) {
 	}
 }
 
-func TestCmdAdmit_VarExpandedDigestUnpinned(t *testing.T) {
+func TestCmdAdmit_VarExpandedDigestPinned(t *testing.T) {
 	dir := t.TempDir()
 	digest := "sha256:" + strings.Repeat("a", 64)
 	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  app:\n    image: nginx@${DIGEST}\n"), 0o644); err != nil {
@@ -87,11 +87,15 @@ func TestCmdAdmit_VarExpandedDigestUnpinned(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out, errb bytes.Buffer
-	// The digest arrives via ${VAR} expansion; Phase 1 treats that as UNPINNED
-	// (r.Raw keeps ${DIGEST}). Under block mode that must refuse the deploy.
+	// the admission-gate design Phase 2: the digest arrives via ${VAR}/.env expansion; the compose
+	// parser resolves it into r.Ref, so admit reads it as PINNED (source "var") and
+	// the allowing trust gate lets the deploy proceed even under block mode.
 	err := cmdAdmitWith([]string{"--pin-mode", "block", filepath.Join(dir, "compose.yaml")}, &out, &errb, admitFakeGate{})
-	if err == nil || !strings.Contains(out.String(), "UNPINNED") {
-		t.Fatalf("var-expanded digest must read as UNPINNED in Phase 1:\nerr=%v\n%s", err, out.String())
+	if err != nil {
+		t.Fatalf("var-expanded digest must read as PINNED in Phase 2 (no block): %v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "UNPINNED") || !strings.Contains(out.String(), "pinned(var)") {
+		t.Fatalf("expected pinned(var), not UNPINNED:\n%s", out.String())
 	}
 }
 
@@ -115,5 +119,34 @@ func TestCmdAdmit_PinStoreKeyMatchesCapture(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "UNPINNED") {
 		t.Fatalf("pin-store keyed image must not read as UNPINNED:\n%s", out.String())
+	}
+}
+
+func TestCmdAdmit_VarExpandedTagStaysUnpinned(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  app:\n    image: nginx:${TAG}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte("TAG=1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	// A var that expands to a TAG (not a digest) has no @sha256: — still UNPINNED.
+	err := cmdAdmitWith([]string{"--pin-mode", "block", filepath.Join(dir, "compose.yaml")}, &out, &errb, admitFakeGate{})
+	if err == nil || !strings.Contains(out.String(), "UNPINNED") {
+		t.Fatalf("var-expanded TAG (no digest) must stay UNPINNED:\nerr=%v\n%s", err, out.String())
+	}
+}
+
+func TestCmdAdmit_UnresolvedVarUnpinned(t *testing.T) {
+	dir := t.TempDir()
+	// no .env -> ${DIGEST} unresolved -> no digest -> UNPINNED (safe direction).
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  app:\n    image: nginx@${DIGEST}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	err := cmdAdmitWith([]string{"--pin-mode", "block", filepath.Join(dir, "compose.yaml")}, &out, &errb, admitFakeGate{})
+	if err == nil || !strings.Contains(out.String(), "UNPINNED") {
+		t.Fatalf("unresolved ${VAR} must read as UNPINNED:\nerr=%v\n%s", err, out.String())
 	}
 }
