@@ -101,6 +101,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return cmdCanary(args[1:], stdout, stderr)
 	case "reconcile":
 		return cmdReconcile(args[1:], stdout, stderr)
+	case "admit":
+		return cmdAdmit(args[1:], stdout, stderr)
 	case "init":
 		return cmdInit(args[1:], stdout, stderr)
 	default:
@@ -132,6 +134,7 @@ Commands:
   queue               Inspect / approve / reject pending REVIEW updates
   audit               Tail the append-only audit log of decisions + applies
   snapshot            List / restore / prune filesystem snapshots
+  admit               Gate a compose deploy on supply-chain posture (exit-code)
   init                Generate a starter config + bearer token
 
 Run "bulwark <command> --help" for command-specific options.`)
