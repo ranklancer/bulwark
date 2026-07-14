@@ -300,3 +300,10 @@ func valueNode(m *yaml.Node, key string) *yaml.Node {
 	}
 	return nil
 }
+
+// StackName derives the stack/target name for a compose file path the same way
+// Discover does: the parent-directory name for the flat <root>/<stack>/compose.yaml
+// layout, else the file base. Exported so deploy-time consumers (the admission-gate design admit
+// gate) key the pin store identically to capture (which records pins under
+// stackName(path)/<service>); a thin wrapper keeps it single-source.
+func StackName(path string) string { return stackName(path) }

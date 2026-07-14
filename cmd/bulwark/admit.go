@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/bulwark-docker/bulwark/internal/admit"
 	"github.com/bulwark-docker/bulwark/internal/capture"
 	"github.com/bulwark-docker/bulwark/internal/config"
+	"github.com/bulwark-docker/bulwark/internal/registry"
 	"github.com/bulwark-docker/bulwark/internal/store"
 	"github.com/bulwark-docker/bulwark/internal/verify"
 )
@@ -74,7 +74,7 @@ func cmdAdmitWith(args []string, stdout, stderr io.Writer, gate admit.TrustGate)
 	cs := &capture.ComposeSource{}
 	var images []admit.Image
 	for _, f := range files {
-		name := strings.TrimSuffix(filepath.Base(f), filepath.Ext(f))
+		name := capture.StackName(f)
 		refs, err := cs.LocateImageRefs(ctx, capture.Target{Name: name, Path: f, Kind: capture.KindFile})
 		if err != nil {
 			return fmt.Errorf("admit: read %s: %w", f, err)
@@ -103,7 +103,7 @@ func cmdAdmitWith(args []string, stdout, stderr io.Writer, gate admit.TrustGate)
 // admitPinState decides whether r is digest-pinned: either the ref already
 // carries an @sha256: digest, or the pin store holds a digest for target/service.
 func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (bool, string) {
-	if strings.Contains(r.Raw, "@sha256:") {
+	if at := strings.LastIndex(r.Raw, "@"); at >= 0 && registry.IsSHA256Digest(strings.ToLower(r.Raw[at+1:])) {
 		return true, r.Raw
 	}
 	if pins != nil {

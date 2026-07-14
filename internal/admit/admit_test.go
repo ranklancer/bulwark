@@ -120,3 +120,14 @@ func TestWorseOrdering(t *testing.T) {
 		t.Fatal("worse() ordering incorrect")
 	}
 }
+
+func TestAdmit_UnknownVerifyDecisionFailsClosed(t *testing.T) {
+	// A trust decision the engine cannot classify must fail closed (block),
+	// never silently allow.
+	g := fakeGate{byRef: map[string]verify.Decision{"z@sha256:1": verify.Decision("bogus")}}
+	e := Engine{Policy: Policy{Pin: verify.ModeWarn}, Gate: g}
+	v := e.Admit(context.Background(), []Image{pinned("z", "z@sha256:1")})
+	if v.Decision != DecisionBlock {
+		t.Fatalf("unknown verify decision must fail closed (block): %+v", v)
+	}
+}

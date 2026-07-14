@@ -67,8 +67,12 @@ func fromVerify(d verify.Decision) Decision {
 		return DecisionBreakGlass
 	case verify.DecisionWarn:
 		return DecisionWarn
-	default:
+	case verify.DecisionAllow:
 		return DecisionAllow
+	default:
+		// Unknown/unhandled trust decision fails closed: an admission gate must
+		// never silently ALLOW on a verdict it cannot classify.
+		return DecisionBlock
 	}
 }
 
@@ -94,7 +98,7 @@ type ImageResult struct {
 	Ref      string          `json:"ref"`
 	Pinned   bool            `json:"pinned"`
 	Decision Decision        `json:"decision"`
-	Trust    *verify.Verdict `json:"trust,omitempty"` // set when the trust engine was consulted (pinned image)
+	Trust    *verify.Verdict `json:"-"` // in-memory only; never serialized (keeps verifier paths out of machine output)
 	Reasons  []string        `json:"reasons,omitempty"`
 }
 
@@ -160,8 +164,16 @@ func (e Engine) Admit(ctx context.Context, images []Image) Verdict {
 		} else if e.Gate != nil {
 			v := e.Gate.Evaluate(ctx, verify.Input{PinnedRef: img.PinnedRef, Labels: img.Labels})
 			r.Trust = &v
-			r.Decision = worse(r.Decision, fromVerify(v.Decision))
-			r.Reasons = append(r.Reasons, v.Reasons...)
+			d := fromVerify(v.Decision)
+			r.Decision = worse(r.Decision, d)
+			// Surface only the path-free remediation code, never the verifier's
+			// free-text reasons (which can embed local cosign/trivy paths). The raw
+			// verdict stays in Trust (json:"-"), out of machine output.
+			reason := "trust: " + string(d)
+			if rc := v.Remediation(); rc != verify.RemediationNone {
+				reason += " (" + string(rc) + ")"
+			}
+			r.Reasons = append(r.Reasons, reason)
 		} else {
 			r.Reasons = append(r.Reasons, "trust: verification disabled (no gate configured)")
 		}

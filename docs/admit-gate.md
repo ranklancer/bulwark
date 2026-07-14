@@ -14,6 +14,8 @@ image's signature / SBOM / provenance / vulnerabilities during bulwark's own
 update loop, and the admission gate runs that same trust engine at the moment a workload is
 deployed — plus a new **pin-state axis**. See the admission-gate design for the full design.
 
+> **Note:** `admit && up` gates *nothing* out of the box. With the default `--pin-mode warn` and no `--config` verify policy, every image resolves to ALLOW/WARN and the deploy always proceeds. To actually stop a deploy, wire a config with the trust axes enabled and ratchet `--pin-mode block` once coverage supports it.
+
 ## Axes
 
 | Axis | Question | Source |
