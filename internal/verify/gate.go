@@ -111,7 +111,11 @@ func (g Gate) Evaluate(ctx context.Context, in Input) Verdict {
 			vr.Err = err
 		} else {
 			for _, vu := range vulns {
-				if vu.Severity >= vp.BlockThreshold {
+				// Fail closed on an ungradable finding: a KNOWN vulnerability whose
+				// severity could not be determined (SeverityUnknown, e.g. an OSV advisory
+				// carrying only a CVSS vector) is treated as blocking — the image IS
+				// affected; we must not pass it just because we cannot grade it.
+				if vu.Severity >= vp.BlockThreshold || vu.Severity == cve.SeverityUnknown {
 					vr.Blocking = append(vr.Blocking, vu)
 					if vu.Severity > vr.Highest {
 						vr.Highest = vu.Severity

@@ -199,3 +199,17 @@ func TestGate_EnforcementModes_SignedVsUnsigned(t *testing.T) {
 		}
 	}
 }
+
+func TestEvaluate_UnknownSeverityVuln_FailsClosed(t *testing.T) {
+	// A KNOWN vulnerability whose severity could not be graded (SeverityUnknown,
+	// e.g. an OSV advisory carrying only a CVSS vector) must BLOCK under block
+	// mode — the image is affected; we must not pass it because it is ungradable.
+	g := Gate{
+		Policy: Policy{Enabled: true, Vuln: VulnPolicy{Mode: ModeBlock, BlockThreshold: cve.SeverityHigh}},
+		Vulns:  fakeSource{vulns: []cve.Vuln{{ID: "OSV-2024-1", Severity: cve.SeverityUnknown}}},
+	}
+	v := g.Evaluate(context.Background(), Input{PinnedRef: "repo@sha256:abc"})
+	if v.Decision != DecisionBlock {
+		t.Fatalf("ungradable (Unknown) known vuln must fail closed, got %s", v.Decision)
+	}
+}

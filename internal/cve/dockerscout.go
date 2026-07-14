@@ -49,20 +49,24 @@ type scoutRule struct {
 
 // ParseDockerScoutSARIF parses one docker-scout SARIF report. It returns the
 // image it describes (best-effort: run properties.imageName, else
-// automationDetails.id, else "") and the de-duplicated CVEs it contains.
-func ParseDockerScoutSARIF(data []byte) (image string, vulns []Vuln, err error) {
+// automationDetails.id, else ""), the de-duplicated CVEs it contains, and
+// structured — whether the document is a real report. A valid SARIF report has
+// at least one run; zero runs (`{}` or `{"runs":[]}`) is a truncated/empty
+// document, NOT a clean scan, so structured is false and callers must treat it
+// as UNKNOWN (fail closed) rather than as a clean image.
+func ParseDockerScoutSARIF(data []byte) (image string, vulns []Vuln, structured bool, err error) {
 	var s scoutSARIF
 	if err := json.Unmarshal(data, &s); err != nil {
-		return "", nil, fmt.Errorf("cve: parse docker-scout sarif: %w", err)
+		return "", nil, false, fmt.Errorf("cve: parse docker-scout sarif: %w", err)
 	}
 	image, vulns = scoutVulns(s)
-	return image, vulns, nil
+	return image, vulns, len(s.Runs) > 0, nil
 }
 
 func scoutVulns(s scoutSARIF) (string, []Vuln) {
 	var image string
 	var out []Vuln
-	seen := make(map[string]bool)
+	idx := make(map[string]int) // CVE id -> index in out (dedup keeping MAX severity)
 	for _, run := range s.Runs {
 		if image == "" {
 			switch {
@@ -74,13 +78,22 @@ func scoutVulns(s scoutSARIF) (string, []Vuln) {
 		}
 		for _, rule := range run.Tool.Driver.Rules {
 			id := cveIDFrom(rule.ID, rule.Name)
-			if id == "" || seen[id] {
+			if id == "" {
 				continue
 			}
-			seen[id] = true
+			sev := scoutSeverity(rule.Properties.CVSSV3Severity, rule.Properties.SecuritySeverity)
+			// On a duplicate id (multi-arch runs[], repeated rule) keep the MAX
+			// severity — a Critical seen after a Low must never bucket as Low.
+			if i, ok := idx[id]; ok {
+				if sev > out[i].Severity {
+					out[i].Severity = sev
+				}
+				continue
+			}
+			idx[id] = len(out)
 			out = append(out, Vuln{
 				ID:       id,
-				Severity: scoutSeverity(rule.Properties.CVSSV3Severity, rule.Properties.SecuritySeverity),
+				Severity: sev,
 				Title:    strings.TrimSpace(rule.ShortDescription.Text),
 			})
 		}
@@ -105,7 +118,9 @@ type DockerScoutDirSource struct {
 }
 
 // Vulns scans the report directory for a docker-scout report describing ref.
-// No matching report yields (nil, nil) — "none/unknown", identical to Trivy.
+// No matching report yields (nil, nil) — "none/unknown", identical to Trivy. A
+// report that matches but is structurally empty (truncated) yields an ERROR, so
+// the trust gate fails closed rather than reading it as a clean image.
 func (d DockerScoutDirSource) Vulns(ctx context.Context, ref string) ([]Vuln, error) {
 	if d.Dir == "" {
 		return nil, fmt.Errorf("cve: docker-scout report_dir is empty")
@@ -125,11 +140,14 @@ func (d DockerScoutDirSource) Vulns(ctx context.Context, ref string) ([]Vuln, er
 		if rerr != nil {
 			continue
 		}
-		image, vulns, perr := ParseDockerScoutSARIF(data)
+		image, vulns, structured, perr := ParseDockerScoutSARIF(data)
 		if perr != nil {
 			continue
 		}
 		if matchArtifact(ref, image, nil, nil) || (image == "" && refMatchesFilename(ref, e.Name())) {
+			if !structured {
+				return nil, fmt.Errorf("cve: docker-scout report %q for %q is structurally empty (no runs; truncated?) — unknown, not clean", e.Name(), ref)
+			}
 			return vulns, nil
 		}
 	}

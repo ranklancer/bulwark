@@ -21,9 +21,12 @@ const scoutSARIFSample = `{
 }`
 
 func TestParseDockerScoutSARIF(t *testing.T) {
-	image, vulns, err := ParseDockerScoutSARIF([]byte(scoutSARIFSample))
+	image, vulns, structured, err := ParseDockerScoutSARIF([]byte(scoutSARIFSample))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !structured {
+		t.Fatal("a report with runs must be structured")
 	}
 	if image != "nginx:1.27" {
 		t.Fatalf("image: got %q", image)
@@ -39,18 +42,32 @@ func TestParseDockerScoutSARIF(t *testing.T) {
 	}
 }
 
+func TestScoutDedupKeepsMaxSeverity(t *testing.T) {
+	// same CVE appears LOW first then CRITICAL (multi-arch runs / repeated rule):
+	// the deduped severity MUST be Critical, never the earlier Low.
+	body := `{"runs":[{"tool":{"driver":{"rules":[
+	  {"id":"CVE-2024-1","properties":{"cvssV3_severity":"low"}},
+	  {"id":"CVE-2024-1","properties":{"cvssV3_severity":"critical"}}
+	]}}}]}`
+	_, vulns, _, err := ParseDockerScoutSARIF([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vulns) != 1 || vulns[0].Severity != SeverityCritical {
+		t.Fatalf("dedup must keep MAX (critical): %+v", vulns)
+	}
+}
+
 func TestDockerScoutDirSource_Match(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "r.sarif.json"), []byte(scoutSARIFSample), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	src := DockerScoutDirSource{Dir: dir}
-	// content match on imageName
 	v, err := src.Vulns(context.Background(), "nginx:1.27")
 	if err != nil || len(v) != 2 {
 		t.Fatalf("content match: %d %v", len(v), err)
 	}
-	// non-matching ref -> none/unknown
 	v, err = src.Vulns(context.Background(), "redis:7")
 	if err != nil || len(v) != 0 {
 		t.Fatalf("non-match should be empty: %d %v", len(v), err)
@@ -59,7 +76,6 @@ func TestDockerScoutDirSource_Match(t *testing.T) {
 
 func TestDockerScoutDirSource_FilenameFallback(t *testing.T) {
 	dir := t.TempDir()
-	// no image identity in content -> filename fallback (nginx_1.27.sarif.json)
 	body := `{"runs":[{"tool":{"driver":{"rules":[{"id":"CVE-2024-9","properties":{"cvssV3_severity":"high"}}]}}}]}`
 	if err := os.WriteFile(filepath.Join(dir, "nginx_1.27.sarif.json"), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -67,6 +83,21 @@ func TestDockerScoutDirSource_FilenameFallback(t *testing.T) {
 	v, err := DockerScoutDirSource{Dir: dir}.Vulns(context.Background(), "nginx:1.27")
 	if err != nil || len(v) != 1 {
 		t.Fatalf("filename fallback: %d %v", len(v), err)
+	}
+}
+
+func TestDockerScoutDirSource_EmptyReportIsUnknown(t *testing.T) {
+	// A truncated report ({} or {"runs":[]}) matched by filename must be UNKNOWN
+	// (error -> gate fails closed), never read as a clean image.
+	for _, body := range []string{`{}`, `{"runs":[]}`} {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "nginx_1.27.sarif.json"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		v, err := DockerScoutDirSource{Dir: dir}.Vulns(context.Background(), "nginx:1.27")
+		if err == nil {
+			t.Fatalf("structurally-empty report %q must return an error (unknown), got clean %v", body, v)
+		}
 	}
 }
 
@@ -82,6 +113,6 @@ func FuzzParseDockerScoutSARIF(f *testing.F) {
 	f.Add([]byte(`{}`))
 	f.Add([]byte(`not json`))
 	f.Fuzz(func(t *testing.T, data []byte) {
-		_, _, _ = ParseDockerScoutSARIF(data) // must not panic
+		_, _, _, _ = ParseDockerScoutSARIF(data) // must not panic
 	})
 }

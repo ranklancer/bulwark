@@ -45,15 +45,18 @@ type osvVuln struct {
 	} `json:"severity"`
 }
 
-// ParseOSVResults parses one osv-scanner results document, returning the image
-// it describes (source.path of the first image-typed result) and its
-// de-duplicated advisories.
-func ParseOSVResults(data []byte) (image string, vulns []Vuln, err error) {
+// ParseOSVResults parses one osv-scanner results document. It returns the image
+// it describes (source.path of the first image-typed result), its de-duplicated
+// advisories, and structured — whether the top-level `results` key was present.
+// osv-scanner emits `{"results":[]}` for a scanned-clean image (key present,
+// empty), versus `{}` (key absent) for a truncated/empty document; only the
+// latter is structurally empty and must be treated as UNKNOWN (fail closed).
+func ParseOSVResults(data []byte) (image string, vulns []Vuln, structured bool, err error) {
 	var r osvResults
 	if err := json.Unmarshal(data, &r); err != nil {
-		return "", nil, fmt.Errorf("cve: parse osv results: %w", err)
+		return "", nil, false, fmt.Errorf("cve: parse osv results: %w", err)
 	}
-	seen := make(map[string]bool)
+	idx := make(map[string]int) // vuln id -> index in out (dedup keeping MAX severity)
 	var out []Vuln
 	for _, res := range r.Results {
 		if image == "" && strings.TrimSpace(res.Source.Path) != "" {
@@ -62,20 +65,29 @@ func ParseOSVResults(data []byte) (image string, vulns []Vuln, err error) {
 		for _, pkg := range res.Packages {
 			for _, v := range pkg.Vulnerabilities {
 				id := osvPreferredID(v)
-				if id == "" || seen[id] {
+				if id == "" {
 					continue
 				}
-				seen[id] = true
+				sev := osvSeverity(v)
+				// Same advisory can recur across packages/ecosystems; keep MAX
+				// severity so a Critical never buckets as a lower earlier hit.
+				if i, ok := idx[id]; ok {
+					if sev > out[i].Severity {
+						out[i].Severity = sev
+					}
+					continue
+				}
+				idx[id] = len(out)
 				out = append(out, Vuln{
 					ID:       id,
-					Severity: osvSeverity(v),
+					Severity: sev,
 					PkgName:  pkg.Package.Name,
 					Title:    strings.TrimSpace(v.Summary),
 				})
 			}
 		}
 	}
-	return image, out, nil
+	return image, out, r.Results != nil, nil
 }
 
 // osvPreferredID prefers a CVE alias (stable, cross-referenced) over the native
@@ -89,8 +101,10 @@ func osvPreferredID(v osvVuln) string {
 	return strings.TrimSpace(v.ID)
 }
 
-// osvSeverity uses the advisory DB's textual severity when present; a bare CVSS
-// vector (no numeric band) is left Unknown rather than guessed.
+// osvSeverity uses the advisory DB's textual severity when present; a CVSS
+// vector string (osv-scanner's usual severity[].score encoding) is NOT a numeric
+// band and is left Unknown rather than guessed. A known advisory that grades as
+// Unknown still fails closed at the gate (it is a known vulnerability).
 func osvSeverity(v osvVuln) Severity {
 	if s := ParseSeverity(v.DatabaseSpecific.Severity); s != SeverityUnknown {
 		return s
@@ -109,8 +123,9 @@ type RegistryAdvisoryDirSource struct {
 	Dir string
 }
 
-// Vulns scans the report directory for an advisory result describing ref.
-// No matching report yields (nil, nil) — "none/unknown".
+// Vulns scans the report directory for an advisory result describing ref. No
+// matching report yields (nil, nil). A matching but structurally-empty (`{}`,
+// no results key) report yields an ERROR so the gate fails closed.
 func (a RegistryAdvisoryDirSource) Vulns(ctx context.Context, ref string) ([]Vuln, error) {
 	if a.Dir == "" {
 		return nil, fmt.Errorf("cve: registry-advisory report_dir is empty")
@@ -130,11 +145,14 @@ func (a RegistryAdvisoryDirSource) Vulns(ctx context.Context, ref string) ([]Vul
 		if rerr != nil {
 			continue
 		}
-		image, vulns, perr := ParseOSVResults(data)
+		image, vulns, structured, perr := ParseOSVResults(data)
 		if perr != nil {
 			continue
 		}
 		if matchArtifact(ref, image, nil, nil) || (image == "" && refMatchesFilename(ref, e.Name())) {
+			if !structured {
+				return nil, fmt.Errorf("cve: registry-advisory report %q for %q is structurally empty (no results; truncated?) — unknown, not clean", e.Name(), ref)
+			}
 			return vulns, nil
 		}
 	}
