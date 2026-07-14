@@ -38,6 +38,10 @@ func buildCVESource(cfg *config.Config) (cve.Source, cve.Severity, error) {
 		reportDir, serverURL = c.Trivy.ReportDir, c.Trivy.ServerURL
 	case "grype":
 		reportDir, serverURL = c.Grype.ReportDir, c.Grype.ServerURL
+	case "docker-scout":
+		reportDir, serverURL = c.DockerScout.ReportDir, c.DockerScout.ServerURL
+	case "registry":
+		reportDir, serverURL = c.Registry.ReportDir, c.Registry.ServerURL
 	}
 	// Preserve the "silently off when unconfigured" behaviour: a trivy/grype
 	// type with no report_dir (or server_url) leaves the axis inert. This is a

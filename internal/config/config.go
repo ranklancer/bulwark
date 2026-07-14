@@ -60,6 +60,10 @@ type CVESourceConfig struct {
 	Type  string            `yaml:"type"` // trivy | grype (via the cve.ScanSource provider factory; docker-scout / registry are reserved extension points)
 	Trivy TrivySourceConfig `yaml:"trivy"`
 	Grype TrivySourceConfig `yaml:"grype"` // same report_dir/server_url shape
+	// DockerScout reads a dir of `docker scout cves --format sarif` reports;
+	// Registry reads a dir of osv-scanner advisory results. Same report_dir shape.
+	DockerScout TrivySourceConfig `yaml:"docker_scout"`
+	Registry    TrivySourceConfig `yaml:"registry"`
 }
 
 // TrivySourceConfig configures a filesystem-report backend. ReportDir points
@@ -557,8 +561,12 @@ func (c *Config) validateSecurity() error {
 		dir, srv = c.Security.CVESource.Trivy.ReportDir, c.Security.CVESource.Trivy.ServerURL
 	case "grype":
 		dir, srv = c.Security.CVESource.Grype.ReportDir, c.Security.CVESource.Grype.ServerURL
+	case "docker-scout":
+		dir, srv = c.Security.CVESource.DockerScout.ReportDir, c.Security.CVESource.DockerScout.ServerURL
+	case "registry":
+		dir, srv = c.Security.CVESource.Registry.ReportDir, c.Security.CVESource.Registry.ServerURL
 	default:
-		return fmt.Errorf("security.cve_source.type %q is not supported (valid: trivy, grype)", c.Security.CVESource.Type)
+		return fmt.Errorf("security.cve_source.type %q is not supported (valid: trivy, grype, docker-scout, registry)", c.Security.CVESource.Type)
 	}
 	// Server mode is not implemented yet (see cve.NewScanSource): a server_url
 	// with no report_dir would silently disable the axis. Require report_dir.

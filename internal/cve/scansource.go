@@ -57,6 +57,16 @@ func NewGrypeReportDir(dir string) ScanSource {
 	return scanSource{Source: GrypeDirSource{Dir: dir}, provider: "grype", kind: ScanKindReportDir}
 }
 
+// NewDockerScoutReportDir wraps a directory of docker-scout SARIF reports.
+func NewDockerScoutReportDir(dir string) ScanSource {
+	return scanSource{Source: DockerScoutDirSource{Dir: dir}, provider: "docker-scout", kind: ScanKindReportDir}
+}
+
+// NewRegistryAdvisoryReportDir wraps a directory of osv-scanner advisory results.
+func NewRegistryAdvisoryReportDir(dir string) ScanSource {
+	return scanSource{Source: RegistryAdvisoryDirSource{Dir: dir}, provider: "registry", kind: ScanKindReportDir}
+}
+
 // ScanSourceSpec is a resolved backend selection (from config).
 type ScanSourceSpec struct {
 	Provider  string // trivy | grype | docker-scout | registry
@@ -85,11 +95,18 @@ func NewScanSource(spec ScanSourceSpec) (ScanSource, error) {
 			return NewGrypeReportDir(spec.ReportDir), nil
 		}
 		return NewTrivyReportDir(spec.ReportDir), nil
-	case "docker-scout":
-		return nil, fmt.Errorf("cve: docker-scout scan source is not implemented yet")
-	case "registry":
-		return nil, fmt.Errorf("cve: registry-advisory scan source is not implemented yet")
+	case "docker-scout", "registry":
+		if strings.TrimSpace(spec.ServerURL) != "" {
+			return nil, fmt.Errorf("cve: %s server mode is not implemented yet (use report_dir)", provider)
+		}
+		if strings.TrimSpace(spec.ReportDir) == "" {
+			return nil, fmt.Errorf("cve: %s requires report_dir", provider)
+		}
+		if provider == "docker-scout" {
+			return NewDockerScoutReportDir(spec.ReportDir), nil
+		}
+		return NewRegistryAdvisoryReportDir(spec.ReportDir), nil
 	default:
-		return nil, fmt.Errorf("cve: unknown scan source provider %q (valid: trivy, grype)", spec.Provider)
+		return nil, fmt.Errorf("cve: unknown scan source provider %q (valid: trivy, grype, docker-scout, registry)", spec.Provider)
 	}
 }
