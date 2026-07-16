@@ -125,6 +125,9 @@ type Result struct {
 	// verified (an unpinned target with a verifier configured).
 	VerifyDecision verify.Decision
 	VerifyBlocked  bool
+	// VerifyBreakGlass is true when a block-mode trust failure was overridden
+	// by a valid, audited break-glass label at the verify-before-pull step.
+	VerifyBreakGlass bool
 
 	Err error
 }
@@ -156,6 +159,12 @@ type ApplyOptions struct {
 	// observing the "bulwark.snapshot.auto" label; explicit
 	// SnapshotTarget always wins.
 	SnapshotAutoInfer bool
+
+	// Labels are the target container's labels, forwarded to the
+	// verify-before-pull trust gate so a label-driven break-glass override is
+	// honored consistently with the deploy-time gate. nil == no labels, so no
+	// override is reachable.
+	Labels map[string]string
 }
 
 // Apply runs the full pull + recreate + verify + (rollback) pipeline.
@@ -218,7 +227,7 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 				"container", originalName, "image", targetImage)
 			return res
 		}
-		verdict := u.Verify.Evaluate(ctx, verify.Input{PinnedRef: targetImage})
+		verdict := u.Verify.Evaluate(ctx, verify.Input{PinnedRef: targetImage, Labels: opts.Labels})
 		res.VerifyDecision = verdict.Decision
 		if verdict.Blocked() {
 			res.VerifyBlocked = true
@@ -227,8 +236,21 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 				"container", originalName, "image", targetImage, "reason", verdict.Summary())
 			return res
 		}
-		logger.Info("updater: verify-before-pull passed",
-			"container", originalName, "image", targetImage, "decision", string(verdict.Decision))
+		if verdict.Decision == verify.DecisionBreakGlass {
+			res.VerifyBreakGlass = true
+			reason := ""
+			if verdict.BreakGlass != nil {
+				reason = verdict.BreakGlass.Reason
+			}
+			// Audit the override at the pull boundary; the deploy-time gate
+			// records the store audit event, this closes the loop at pull.
+			logger.Warn("updater: verify-before-pull OVERRIDDEN by break-glass; pulling",
+				"container", originalName, "image", targetImage,
+				"reason", reason, "detail", verdict.Summary())
+		} else {
+			logger.Info("updater: verify-before-pull passed",
+				"container", originalName, "image", targetImage, "decision", string(verdict.Decision))
+		}
 	}
 
 	// --- 1.5. Pre-update hook ----------------------------------------------

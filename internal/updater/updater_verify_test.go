@@ -84,3 +84,54 @@ func TestVerifyBeforePull_AllowProceeds(t *testing.T) {
 		t.Fatalf("allow must pull; ops=%v", fd.ops)
 	}
 }
+
+// recordingVerifier captures the Input it was called with and returns a preset
+// verdict, so a test can assert that container labels reach the trust gate.
+type recordingVerifier struct {
+	verdict   verify.Verdict
+	lastInput verify.Input
+}
+
+func (r *recordingVerifier) Evaluate(_ context.Context, in verify.Input) verify.Verdict {
+	r.lastInput = in
+	return r.verdict
+}
+
+func TestVerifyBeforePull_BreakGlassProceedsAndForwardsLabels(t *testing.T) {
+	// #65: a label-driven break-glass override must be REACHABLE at the
+	// verify-before-pull step (labels forwarded) and AUDITED (VerifyBreakGlass),
+	// and the update must proceed to pull rather than be re-blocked.
+	fd := &fakeDocker{containers: map[string]*docker.ContainerInspect{
+		"old-id": sampleInspect("old-id", "sonarr", "lscr.io/linuxserver/sonarr:4.0.10-ls45"),
+	}}
+	fd.healthTimeline = func(i int) docker.HealthStatus { return docker.HealthNone }
+	rv := &recordingVerifier{verdict: verify.Verdict{
+		Decision:   verify.DecisionBreakGlass,
+		BreakGlass: &verify.BreakGlass{Reason: "operator override"},
+		Reasons:    []string{"break-glass"},
+	}}
+	u := &Updater{
+		Docker:         fd,
+		StartupGrace:   1 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		HealthTimeout:  100 * time.Millisecond,
+		Verify:         rv,
+	}
+	labels := map[string]string{"bulwark.verify.break-glass": "operator override"}
+	res := u.ApplyWithOptions(context.Background(), "old-id", pinnedTarget, ApplyOptions{Labels: labels})
+	if res.Err != nil {
+		t.Fatalf("break-glass must proceed to pull, got err=%v ops=%v", res.Err, fd.ops)
+	}
+	if !res.VerifyBreakGlass {
+		t.Fatalf("VerifyBreakGlass must be true on a break-glass verdict")
+	}
+	if res.VerifyBlocked {
+		t.Fatalf("break-glass must not block")
+	}
+	if !pulled(fd.ops) {
+		t.Fatalf("break-glass must proceed to pull; ops=%v", fd.ops)
+	}
+	if rv.lastInput.Labels["bulwark.verify.break-glass"] != "operator override" {
+		t.Fatalf("labels not forwarded to the verify gate: %+v", rv.lastInput.Labels)
+	}
+}
