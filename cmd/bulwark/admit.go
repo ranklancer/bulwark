@@ -121,7 +121,16 @@ func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pin
 			if strings.TrimSpace(rec.Ref) != "" {
 				base = rec.Ref // the captured repo ref, never a raw ${VAR} literal
 			}
-			return true, base + "@" + rec.IndexDigest, "store"
+			// Hardening (#64/#67): report a store-sourced pin only when a
+			// well-formed digest-pinned reference can be POSITIVELY composed.
+			// composeStorePin fails closed on an unresolved variable of any
+			// form (${VAR}, ${VAR:-x}, or bare $VAR), a base already carrying
+			// an "@" (which would double the "@sha256:"), a non-canonical
+			// stored digest, or an unparseable base. Anything it cannot attest
+			// falls through to unpinned rather than emitting a malformed ref.
+			if pinnedRef, ok := composeStorePin(base, rec.IndexDigest); ok {
+				return true, pinnedRef, "store"
+			}
 		}
 	}
 	return false, r.Raw, ""
@@ -131,6 +140,49 @@ func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pin
 func hasSHA256Digest(ref string) bool {
 	at := strings.LastIndex(ref, "@")
 	return at >= 0 && registry.IsSHA256Digest(strings.ToLower(ref[at+1:]))
+}
+
+// composeStorePin composes a digest-pinned reference from a base image
+// reference and a store-recorded digest, returning ok=true ONLY when the
+// result is a well-formed, positively verifiable pinned reference. It fails
+// closed (ok=false) on: an unresolved variable placeholder of any form
+// (${VAR}, ${VAR:-def}, or a bare $VAR — a '$' is never valid in a Docker
+// image reference, so its presence means an unexpanded variable that cannot
+// be attested); a base already containing '@' (which would yield a doubled
+// '@sha256:'); a stored digest that is not a canonical sha256:<64hex>; or a
+// base that is not a parseable image reference.
+func composeStorePin(base, digest string) (string, bool) {
+	base = strings.TrimSpace(base)
+	digest = strings.TrimSpace(digest)
+	if strings.ContainsRune(base, '$') {
+		return "", false
+	}
+	if strings.Contains(base, "@") {
+		return "", false
+	}
+	// Reject any character outside the image-reference grammar
+	// (registry[:port]/name[:tag]); registry.Parse is permissive, so this
+	// catches junk like whitespace or shell metacharacters before we
+	// splice a digest onto it.
+	if strings.IndexFunc(base, func(r rune) bool {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return false
+		case r == '.' || r == '_' || r == '/' || r == ':' || r == '-':
+			return false
+		default:
+			return true
+		}
+	}) >= 0 {
+		return "", false
+	}
+	if !registry.IsSHA256Digest(strings.ToLower(digest)) {
+		return "", false
+	}
+	if _, err := registry.Parse(base); err != nil {
+		return "", false
+	}
+	return base + "@" + digest, true
 }
 
 func admitCountBlocked(v admit.Verdict) int {

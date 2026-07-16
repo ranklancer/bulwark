@@ -69,6 +69,21 @@ report for the same tag but a different digest does not match. This is what keep
 a "current" and a "candidate" image (same tag, different digest) from collapsing
 onto one report.
 
+## Truncated reports
+
+A structurally empty (truncated) report — one that parses but carries no runs
+or results — is treated as **UNKNOWN** and fails closed, but only for a report
+that can be **attributed to the requested reference**. Attribution uses the
+report's declared image (`imageName` / `source.path`) and, as a fallback, the
+report **filename**. A truncated report that both (a) declares no image in its
+content and (b) has a filename that does not match the requested reference
+cannot be attributed to any image, and is therefore skipped for all references.
+
+This is safe by design — such a report is never read as "clean" for any
+specific image — but a scanner whose output omits the image identity could let
+a truncation go unsurfaced. Follow the `repo_tag` filename convention (with `/`
+and `:` sanitized to `_`) so a truncated report stays attributable to its image.
+
 ## Fail-closed
 
 When `security.enabled=true` and a backend is configured but cannot be built
