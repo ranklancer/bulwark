@@ -128,6 +128,11 @@ func (g Gate) Evaluate(ctx context.Context, in Input) Verdict {
 			var reason string
 			if vr.Err != nil {
 				reason = "vulnerability: unable to scan (" + vr.Err.Error() + ")"
+			} else if vr.Highest == cve.SeverityUnknown {
+				// Block driven solely by ungradable (Unknown-severity) findings:
+				// report it as such rather than a misleading severity band (#63).
+				reason = fmt.Sprintf("vulnerability: %d ungradable finding(s) - blocked (fail-closed)",
+					len(vr.Blocking))
 			} else {
 				reason = fmt.Sprintf("vulnerability: %d at/above %s (highest %s)",
 					len(vr.Blocking), vp.BlockThreshold, vr.Highest)

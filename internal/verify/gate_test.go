@@ -3,6 +3,7 @@ package verify
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -211,5 +212,33 @@ func TestEvaluate_UnknownSeverityVuln_FailsClosed(t *testing.T) {
 	v := g.Evaluate(context.Background(), Input{PinnedRef: "repo@sha256:abc"})
 	if v.Decision != DecisionBlock {
 		t.Fatalf("ungradable (Unknown) known vuln must fail closed, got %s", v.Decision)
+	}
+}
+
+func TestEvaluate_PureUngradableBlock_ReasonReadsUngradable(t *testing.T) {
+	// When a block is driven solely by ungradable (Unknown-severity) findings,
+	// the reason must say so rather than reporting "highest Unknown" (#63).
+	g := Gate{
+		Policy: Policy{Enabled: true, Vuln: VulnPolicy{Mode: ModeBlock, BlockThreshold: cve.SeverityHigh}},
+		Vulns: fakeSource{vulns: []cve.Vuln{
+			{ID: "OSV-2024-1", Severity: cve.SeverityUnknown},
+			{ID: "OSV-2024-2", Severity: cve.SeverityUnknown},
+		}},
+	}
+	v := g.Evaluate(context.Background(), Input{PinnedRef: "repo@sha256:abc"})
+	if v.Decision != DecisionBlock {
+		t.Fatalf("pure-ungradable must fail closed, got %s", v.Decision)
+	}
+	var vulnReason string
+	for _, r := range v.Reasons {
+		if strings.HasPrefix(r, "vulnerability:") {
+			vulnReason = r
+		}
+	}
+	if !strings.Contains(vulnReason, "ungradable") {
+		t.Fatalf("reason should name ungradable findings, got %q", vulnReason)
+	}
+	if strings.Contains(vulnReason, "highest") {
+		t.Fatalf("pure-ungradable reason must not report a severity band, got %q", vulnReason)
 	}
 }
