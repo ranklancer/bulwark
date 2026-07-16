@@ -1,0 +1,40 @@
+# Code owners for bulwark.
+#
+# GitHub requests a review from the listed owner(s) on any pull request that
+# touches a matching path. The LAST matching pattern wins. A repository ruleset
+# / branch protection rule ("Require review from Code Owners") is what turns
+# these entries into a hard gate; this file declares the intent.
+#
+# The whole tree defaults to the maintainer; the security-sensitive surfaces are
+# listed explicitly so a future added collaborator still cannot land a change to
+# the trust engine, admission gate, scan-source parsers, release/CI plumbing, or
+# dependency manifests without maintainer review.
+
+*                           @ranklancer
+
+# --- Supply-chain trust surfaces -------------------------------------------
+/internal/verify/           @ranklancer
+/internal/admit/            @ranklancer
+/internal/cve/              @ranklancer
+/internal/registry/         @ranklancer
+/internal/updater/          @ranklancer
+/internal/reconcile/        @ranklancer
+/cmd/bulwark/               @ranklancer
+
+# --- Build, release & CI/CD plumbing ---------------------------------------
+/.github/                   @ranklancer
+/Dockerfile                 @ranklancer
+/Makefile                   @ranklancer
+/.goreleaser.yaml           @ranklancer
+
+# --- Security policy & scanning config -------------------------------------
+/SECURITY.md                @ranklancer
+/.gitleaks.toml             @ranklancer
+/.gitleaksignore            @ranklancer
+/.pre-commit-config.yaml    @ranklancer
+
+# --- Dependency manifests ---------------------------------------------------
+/go.mod                     @ranklancer
+/go.sum                     @ranklancer
+/web/package.json           @ranklancer
+/web/package-lock.json      @ranklancer
