@@ -121,7 +121,15 @@ func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pin
 			if strings.TrimSpace(rec.Ref) != "" {
 				base = rec.Ref // the captured repo ref, never a raw ${VAR} literal
 			}
-			return true, base + "@" + rec.IndexDigest, "store"
+			// Hardening (#64): a base that still carries an unresolved ${VAR}
+			// placeholder (degenerate: no captured Ref and an unexpanded written
+			// ref) cannot form a well-formed pinned reference. Splicing the stored
+			// digest would yield a malformed "...${VAR}@sha256:..." (doubled @).
+			// Reject: fall through to unpinned so the pin-state axis reports it
+			// clearly rather than emitting a confusing reference.
+			if !strings.Contains(base, "${") {
+				return true, base + "@" + rec.IndexDigest, "store"
+			}
 		}
 	}
 	return false, r.Raw, ""

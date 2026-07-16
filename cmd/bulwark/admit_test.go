@@ -150,3 +150,30 @@ func TestCmdAdmit_UnresolvedVarUnpinned(t *testing.T) {
 		t.Fatalf("unresolved ${VAR} must read as UNPINNED:\nerr=%v\n%s", err, out.String())
 	}
 }
+
+func TestCmdAdmit_PinStoreUnresolvedVarBaseRejected(t *testing.T) {
+	// #64: the pin store holds a digest but has no captured Ref, and the written
+	// ref is an unresolved ${VAR}. The store branch must NOT splice the digest onto
+	// the placeholder base (which would yield a malformed "nginx@${DIGEST}@sha256:..."
+	// with a doubled @); it rejects, so the image reads UNPINNED (fail-closed under
+	// block mode) rather than emitting a confusing pinned reference.
+	dir := t.TempDir()
+	cpath := filepath.Join(dir, "compose.yaml")
+	if err := os.WriteFile(cpath, []byte("services:\n  app:\n    image: nginx@${DIGEST}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	data := t.TempDir()
+	ps := store.OpenPinStore(data)
+	// Degenerate record: digest present, Ref empty.
+	if err := ps.Set(capture.StackName(cpath)+"/app", store.PinRecord{IndexDigest: "sha256:" + strings.Repeat("c", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	err := cmdAdmitWith([]string{"--pin-mode", "block", "--data-dir", data, cpath}, &out, &errb, admitFakeGate{})
+	if err == nil || !strings.Contains(out.String(), "UNPINNED") {
+		t.Fatalf("unresolved-var base with store digest must reject to UNPINNED:\nerr=%v\n%s", err, out.String())
+	}
+	if strings.Contains(out.String(), "${DIGEST}@sha256") || strings.Contains(out.String(), "@sha256:cccc") {
+		t.Fatalf("must not emit a malformed doubled-@ pinned reference:\n%s", out.String())
+	}
+}
