@@ -1,0 +1,162 @@
+# Example deployment of Bulwark, hardened to a 14-point baseline:
+# no-new-privileges, cap_drop ALL, read-only rootfs + tmpfs, pinned image
+# tags, per-service memory/CPU + log limits, health checks, an isolated
+# bridge network, and — critically — a docker-socket-proxy so Bulwark never
+# sees the raw Docker socket.
+#
+# All addresses use RFC-reserved ranges; the bind address, image version, and
+# all secrets come from a sibling .env file (chmod 600) — see .env.example —
+# never hardcoded here.
+#
+# Quick start:
+#   1. Generate a bearer token:        openssl rand -hex 32
+#   2. Copy configs/bulwark.example.yaml to ./config/bulwark.yaml; keep
+#      docker.host: tcp://socket-proxy:2375, and under api.auth set
+#      type: bearer + token: ${BULWARK_API_TOKEN}.
+#   3. cp .env.example .env && chmod 600 .env, then fill in the values.
+#   4. docker compose -f docker-compose.example.yaml up -d
+#   5. Visit http://127.0.0.1:8080/ and paste the token at /login.
+#
+# For LAN/remote access, put Bulwark behind your reverse proxy rather than
+# widening BULWARK_BIND_ADDR — the secure default binds loopback only.
+
+services:
+  # The ONLY container that touches the Docker socket. It exposes a filtered,
+  # mostly read-only slice of the Docker API to Bulwark over TCP.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0   # pinned
+    container_name: bulwark-socket-proxy
+    restart: unless-stopped
+    environment:
+      # Read-only API surface Bulwark needs to scan + classify.
+      - CONTAINERS=1
+      - IMAGES=1
+      - INFO=1
+      - VERSION=1
+      - PING=1
+      - NETWORKS=1
+      - VOLUMES=1
+      # Write surface. Required ONLY for `bulwark run --apply` (container
+      # recreate). Set POST=0 for a scan-only deployment.
+      - POST=1
+      # Everything else stays denied by default. Pinned explicitly so an
+      # image-default change can't silently widen the surface.
+      - EXEC=0
+      - AUTH=0
+      - SECRETS=0
+      - SWARM=0
+      - SYSTEM=0
+      - BUILD=0
+      - CONFIGS=0
+      - DISTRIBUTION=0
+      - PLUGINS=0
+      - SERVICES=0
+      - TASKS=0
+    volumes:
+      # The single, audited place the socket is mounted in the whole stack,
+      # read-only — the proxy never needs to write to it.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /run            # haproxy writes its pid + runtime socket here
+    networks:
+      - bulwark-internal
+    # No published ports: reachable only by Bulwark on the internal network.
+    mem_limit: 64m
+    cpus: 0.25
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2375/_ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  bulwark:
+    image: ghcr.io/ranklancer/bulwark:${BULWARK_VERSION}   # pin in .env (never :latest)
+    container_name: bulwark
+    restart: unless-stopped
+    depends_on:
+      socket-proxy:
+        condition: service_healthy
+    command:
+      - run
+      - --config=/config/bulwark.yaml
+      - --data-dir=/data
+      - --listen=:8080
+      # Auto-apply qualifying updates. Requires a snapshot backend in
+      # bulwark.yaml (or snapshots.allow_apply_without_backend: true) AND
+      # POST=1 on the socket-proxy above. Start without it until you trust
+      # the classifier for your stack.
+      # - --apply
+    environment:
+      - TZ=UTC
+      # Bearer token for the API + dashboard, referenced from bulwark.yaml as
+      # ${BULWARK_API_TOKEN}. Defined in .env, never inline here.
+      - BULWARK_API_TOKEN
+    volumes:
+      - ./config:/config:ro          # config is read-only to the daemon
+      - ./data:/data                 # persistent state (history, dedup, configstore)
+      # Bulwark runs as a non-root user baked into the image (NOT root). If you
+      # bind-mount a host dir here and hit "permission denied", chown it to the
+      # image's uid:gid — read them from the image itself:
+      #   docker run --rm --entrypoint id ghcr.io/ranklancer/bulwark:${BULWARK_VERSION} bulwark
+      # Optional hooks dir (read-only); gate paths with hooks.hooks_root.
+      # - ./hooks:/hooks:ro
+    ports:
+      # Bind a specific address from .env (default 127.0.0.1), never 0.0.0.0.
+      - "${BULWARK_BIND_ADDR}:8080:8080"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL                          # the Go daemon needs no Linux capabilities
+    read_only: true
+    tmpfs:
+      - /tmp
+    networks:
+      - bulwark-internal             # to reach socket-proxy
+      - bulwark-egress               # outbound HTTPS to registries
+    mem_limit: 256m                  # Go daemon; small steady-state footprint
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    labels:
+      bulwark.enable: "false"        # Bulwark does not update itself
+
+# To opt your OTHER services into Bulwark-managed updates, add labels:
+#   labels:
+#     bulwark.enable: "true"
+#     bulwark.risk: "review"
+#     bulwark.schedule: "0 3 * * 0"
+#     bulwark.hook.pre-update: "/hooks/drain.sh"
+#     bulwark.health.timeout: "300s"
+#     bulwark.snapshot.dataset: "pool/docker/myapp"
+
+networks:
+  # Bulwark <-> socket-proxy only. internal: true => no egress on this
+  # network; the proxy never needs the internet.
+  bulwark-internal:
+    name: bulwark-internal
+    driver: bridge
+    internal: true
+  # Bulwark needs outbound HTTPS to query registries for new digests/tags.
+  bulwark-egress:
+    name: bulwark-egress
+    driver: bridge

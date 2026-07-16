@@ -1,0 +1,477 @@
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/Button";
+import { Spinner } from "@/components/ui/Spinner";
+import {
+  useCreateNotifier,
+  useNotifierDetail,
+  useTestEphemeralNotifier,
+  useUpdateNotifier,
+} from "@/lib/hooks";
+import type { NotifierCreateRequest, NotifierKind } from "@/lib/types";
+
+interface Props {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+  /**
+   * When set, the modal renders in "edit" mode: it fetches the
+   * existing entry by id, pre-fills the form, and saves via PATCH.
+   * When undefined, the modal creates a new entry via POST.
+   */
+  editID?: string;
+}
+
+type FormState = {
+  name: string;
+  kind: NotifierKind;
+  minLevel: "safe" | "review" | "breaking";
+  webhookURL: string;
+  slackChannel: string;
+  smtpHost: string;
+  smtpPort: string;
+  smtpUsername: string;
+  smtpPassword: string;
+  smtpFrom: string;
+  smtpTo: string;
+  smtpTLS: boolean;
+  haURL: string;
+  haToken: string;
+  ntfyServer: string;
+  ntfyTopic: string;
+  ntfyToken: string;
+};
+
+const INITIAL: FormState = {
+  name: "",
+  kind: "slack",
+  minLevel: "review",
+  webhookURL: "",
+  slackChannel: "",
+  smtpHost: "",
+  smtpPort: "587",
+  smtpUsername: "",
+  smtpPassword: "",
+  smtpFrom: "",
+  smtpTo: "",
+  smtpTLS: true,
+  haURL: "",
+  haToken: "",
+  ntfyServer: "",
+  ntfyTopic: "",
+  ntfyToken: "",
+};
+
+/**
+ * AddNotifierModal renders an inline modal that captures the per-type
+ * fields needed to create a notifier. The "Send test" button uses the
+ * ephemeral test endpoint (no persistence) so the operator can confirm
+ * delivery before saving. "Save" persists via POST /api/v1/notifiers
+ * and triggers a registry reload daemon-side.
+ */
+export function AddNotifierModal({ open, onClose, onCreated, editID }: Props) {
+  const isEdit = Boolean(editID);
+  const [form, setForm] = useState<FormState>(INITIAL);
+  const { create, busy: creating, error: createError } = useCreateNotifier();
+  const { update, busy: updating, error: updateError } = useUpdateNotifier();
+  const { send: testSend, busy: testing, error: testError, ok: testOk } = useTestEphemeralNotifier();
+  const { data: detail, loading: loadingDetail } = useNotifierDetail(open && editID ? editID : null);
+  const saving = creating || updating;
+  const saveError = createError || updateError;
+
+  // Hydrate the form when an existing notifier loads.
+  useEffect(() => {
+    if (!detail) return;
+    setForm({
+      name: detail.name,
+      kind: detail.kind,
+      minLevel: (detail.min_level as FormState["minLevel"]) || "review",
+      webhookURL:
+        detail.slack?.webhook_url ??
+        detail.discord?.webhook_url ??
+        detail.teams?.webhook_url ??
+        "",
+      slackChannel: detail.slack?.channel ?? "",
+      smtpHost: detail.smtp?.host ?? "",
+      smtpPort: String(detail.smtp?.port ?? 587),
+      smtpUsername: detail.smtp?.username ?? "",
+      smtpPassword: detail.smtp?.password ?? "",
+      smtpFrom: detail.smtp?.from ?? "",
+      smtpTo: (detail.smtp?.to ?? []).join(", "),
+      smtpTLS: detail.smtp?.tls ?? true,
+      haURL: detail.homeassistant?.url ?? "",
+      haToken: detail.homeassistant?.token ?? "",
+      ntfyServer: detail.ntfy?.server_url ?? "",
+      ntfyTopic: detail.ntfy?.topic ?? "",
+      ntfyToken: detail.ntfy?.token ?? "",
+    });
+  }, [detail]);
+
+  // Reset to defaults when re-opening for a new entry.
+  useEffect(() => {
+    if (open && !editID) setForm(INITIAL);
+  }, [open, editID]);
+
+  if (!open) return null;
+
+  function reset() {
+    setForm(INITIAL);
+  }
+
+  function buildRequest(): NotifierCreateRequest | null {
+    if (!form.name.trim()) return null;
+    const base = {
+      name: form.name.trim(),
+      kind: form.kind,
+      min_level: form.minLevel,
+      enabled: true,
+    };
+    switch (form.kind) {
+      case "slack":
+        if (!form.webhookURL.trim()) return null;
+        return {
+          ...base,
+          slack: {
+            webhook_url: form.webhookURL.trim(),
+            channel: form.slackChannel.trim() || undefined,
+          },
+        };
+      case "discord":
+        if (!form.webhookURL.trim()) return null;
+        return { ...base, discord: { webhook_url: form.webhookURL.trim() } };
+      case "teams":
+        if (!form.webhookURL.trim()) return null;
+        return { ...base, teams: { webhook_url: form.webhookURL.trim() } };
+      case "homeassistant":
+        if (!form.haURL.trim() || !form.haToken.trim()) return null;
+        return {
+          ...base,
+          homeassistant: {
+            url: form.haURL.trim(),
+            token: form.haToken.trim(),
+          },
+        };
+      case "ntfy":
+        if (!form.ntfyServer.trim() || !form.ntfyTopic.trim()) return null;
+        return {
+          ...base,
+          ntfy: {
+            server_url: form.ntfyServer.trim(),
+            topic: form.ntfyTopic.trim(),
+            token: form.ntfyToken.trim() || undefined,
+          },
+        };
+      case "smtp": {
+        const port = parseInt(form.smtpPort, 10);
+        if (!form.smtpHost.trim() || isNaN(port) || !form.smtpFrom.trim() || !form.smtpTo.trim()) {
+          return null;
+        }
+        return {
+          ...base,
+          smtp: {
+            host: form.smtpHost.trim(),
+            port,
+            username: form.smtpUsername.trim() || undefined,
+            password: form.smtpPassword.trim() || undefined,
+            from: form.smtpFrom.trim(),
+            to: form.smtpTo.split(",").map((s) => s.trim()).filter(Boolean),
+            tls: form.smtpTLS,
+          },
+        };
+      }
+    }
+  }
+
+  async function handleTest() {
+    const req = buildRequest();
+    if (!req) return;
+    await testSend(req);
+  }
+
+  async function handleSave() {
+    const req = buildRequest();
+    if (!req) return;
+    try {
+      if (editID) {
+        await update(editID, req);
+      } else {
+        await create(req);
+      }
+      onCreated();
+      reset();
+      onClose();
+    } catch {
+      // saveError is rendered inline.
+    }
+  }
+
+  function handleClose() {
+    reset();
+    onClose();
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      role="dialog"
+      aria-modal="true"
+    >
+      <div className="w-full max-w-lg rounded-lg border border-border bg-background p-6 shadow-lg">
+        <h2 className="text-lg font-semibold tracking-tight">
+          {isEdit ? "Edit notifier" : "Add notifier"}
+        </h2>
+        <p className="mt-1 text-xs text-muted-foreground">
+          {isEdit
+            ? "Changes persist to the encrypted config store and reload immediately — no restart required."
+            : "New notifiers persist to the encrypted config store at "}
+          {!isEdit && (
+            <>
+              <code className="mx-1">{"<datadir>/config.enc"}</code>. The daemon picks them up immediately — no restart required.
+            </>
+          )}
+        </p>
+        {loadingDetail ? (
+          <p className="mt-2 text-xs text-muted-foreground">
+            <Spinner /> Loading existing values…
+          </p>
+        ) : null}
+
+        <div className="mt-4 space-y-3">
+          <Field label="Name">
+            <input
+              type="text"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              className={INPUT}
+              placeholder="ops-channel"
+            />
+          </Field>
+          <Field label="Type">
+            <select
+              value={form.kind}
+              onChange={(e) => setForm({ ...form, kind: e.target.value as NotifierKind })}
+              className={INPUT}
+            >
+              <option value="slack">Slack</option>
+              <option value="discord">Discord</option>
+              <option value="teams">Microsoft Teams</option>
+              <option value="smtp">SMTP / Email</option>
+              <option value="homeassistant">Home Assistant</option>
+              <option value="ntfy">ntfy</option>
+            </select>
+          </Field>
+          <Field label="Minimum risk level">
+            <select
+              value={form.minLevel}
+              onChange={(e) => setForm({ ...form, minLevel: e.target.value as FormState["minLevel"] })}
+              className={INPUT}
+            >
+              <option value="safe">safe (all updates)</option>
+              <option value="review">review (default)</option>
+              <option value="breaking">breaking (only major / breaking)</option>
+            </select>
+          </Field>
+
+          {(form.kind === "slack" || form.kind === "discord" || form.kind === "teams") && (
+            <Field label="Webhook URL">
+              <input
+                type="url"
+                value={form.webhookURL}
+                onChange={(e) => setForm({ ...form, webhookURL: e.target.value })}
+                className={INPUT}
+                placeholder="https://hooks.example.com/services/..."
+              />
+            </Field>
+          )}
+          {form.kind === "slack" && (
+            <Field label="Channel override (optional)">
+              <input
+                type="text"
+                value={form.slackChannel}
+                onChange={(e) => setForm({ ...form, slackChannel: e.target.value })}
+                className={INPUT}
+                placeholder="#alerts"
+              />
+            </Field>
+          )}
+
+          {form.kind === "homeassistant" && (
+            <>
+              <Field label="Home Assistant URL">
+                <input
+                  type="url"
+                  value={form.haURL}
+                  onChange={(e) => setForm({ ...form, haURL: e.target.value })}
+                  className={INPUT}
+                  placeholder="http://homeassistant.local:8123"
+                />
+              </Field>
+              <Field label="Long-lived access token">
+                <input
+                  type="password"
+                  value={form.haToken}
+                  onChange={(e) => setForm({ ...form, haToken: e.target.value })}
+                  className={INPUT}
+                />
+              </Field>
+            </>
+          )}
+
+          {form.kind === "ntfy" && (
+            <>
+              <Field label="ntfy server URL">
+                <input
+                  type="url"
+                  value={form.ntfyServer}
+                  onChange={(e) => setForm({ ...form, ntfyServer: e.target.value })}
+                  className={INPUT}
+                  placeholder="https://ntfy.sh or https://ntfy.example.com"
+                />
+              </Field>
+              <Field label="Topic (bare name, no slashes)">
+                <input
+                  type="text"
+                  value={form.ntfyTopic}
+                  onChange={(e) => setForm({ ...form, ntfyTopic: e.target.value })}
+                  className={INPUT}
+                  placeholder="bulwark-alerts"
+                />
+              </Field>
+              <Field label="Access token (optional)">
+                <input
+                  type="password"
+                  value={form.ntfyToken}
+                  onChange={(e) => setForm({ ...form, ntfyToken: e.target.value })}
+                  className={INPUT}
+                  placeholder="tk_..."
+                  autoComplete="off"
+                />
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Leave blank for public topics. Saved tokens display as{" "}
+                  <code>***</code> on edit; replace to rotate, blank to clear.
+                </p>
+              </Field>
+            </>
+          )}
+
+          {form.kind === "smtp" && (
+            <>
+              <div className="grid grid-cols-3 gap-3">
+                <div className="col-span-2">
+                  <Field label="SMTP host">
+                    <input
+                      type="text"
+                      value={form.smtpHost}
+                      onChange={(e) => setForm({ ...form, smtpHost: e.target.value })}
+                      className={INPUT}
+                      placeholder="smtp.example.com"
+                    />
+                  </Field>
+                </div>
+                <Field label="Port">
+                  <input
+                    type="number"
+                    value={form.smtpPort}
+                    onChange={(e) => setForm({ ...form, smtpPort: e.target.value })}
+                    className={INPUT}
+                  />
+                </Field>
+              </div>
+              <Field label="Username (optional)">
+                <input
+                  type="text"
+                  value={form.smtpUsername}
+                  onChange={(e) => setForm({ ...form, smtpUsername: e.target.value })}
+                  className={INPUT}
+                />
+              </Field>
+              <Field label="Password (optional)">
+                <input
+                  type="password"
+                  value={form.smtpPassword}
+                  onChange={(e) => setForm({ ...form, smtpPassword: e.target.value })}
+                  className={INPUT}
+                />
+              </Field>
+              <Field label="From address">
+                <input
+                  type="email"
+                  value={form.smtpFrom}
+                  onChange={(e) => setForm({ ...form, smtpFrom: e.target.value })}
+                  className={INPUT}
+                  placeholder="bulwark@example.com"
+                />
+              </Field>
+              <Field label="To addresses (comma-separated)">
+                <input
+                  type="text"
+                  value={form.smtpTo}
+                  onChange={(e) => setForm({ ...form, smtpTo: e.target.value })}
+                  className={INPUT}
+                  placeholder="ops@example.com, oncall@example.com"
+                />
+              </Field>
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={form.smtpTLS}
+                  onChange={(e) => setForm({ ...form, smtpTLS: e.target.checked })}
+                />
+                Use STARTTLS
+              </label>
+            </>
+          )}
+
+          {saveError && (
+            <p className="text-sm text-red-600" role="alert">
+              {saveError}
+            </p>
+          )}
+          {testError && (
+            <p className="text-sm text-red-600" role="alert">
+              Test failed: {testError}
+            </p>
+          )}
+          {testOk && (
+            <p className="text-sm text-emerald-700 dark:text-emerald-400">
+              Test event delivered.
+            </p>
+          )}
+        </div>
+
+        <div className="mt-6 flex items-center justify-end gap-2">
+          <Button variant="ghost" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button
+            variant="secondary"
+            onClick={() => void handleTest()}
+            disabled={testing || saving}
+          >
+            {testing ? <Spinner /> : null}
+            Send test
+          </Button>
+          <Button
+            variant="primary"
+            onClick={() => void handleSave()}
+            disabled={saving || testing}
+          >
+            {saving ? <Spinner /> : null}
+            Save
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const INPUT =
+  "w-full rounded-md border border-border bg-background px-3 py-1.5 text-sm focus:border-primary focus:outline-none focus:ring-1 focus:ring-primary";
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="block">
+      <span className="mb-1 block text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
+    </label>
+  );
+}

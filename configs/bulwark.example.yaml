@@ -1,0 +1,396 @@
+# Bulwark configuration — every field has a sensible default. Start with this
+# example and remove blocks you don't need. All examples below use RFC-reserved
+# IPs (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24) and example.com domains.
+#
+# Secrets: any ${VAR} token below is replaced at load time with environment
+# variable VAR. Every such secret also supports the Docker-secrets _FILE
+# convention — set VAR_FILE to a file path (e.g. a mounted docker secret) and
+# the value is read from that file. Provide exactly one of VAR or VAR_FILE;
+# setting both is rejected, and a missing/unreadable/empty VAR_FILE fails
+# closed. See docs/secrets.md.
+
+# How Bulwark connects to Docker. The recommended (and example-compose)
+# deployment talks to a docker-socket-proxy over TCP rather than bind-mounting
+# the raw /var/run/docker.sock into Bulwark: the proxy exposes only the
+# read-only API sections Bulwark needs (plus POST when you run with --apply),
+# so a compromised Bulwark cannot drive the daemon. See
+# docker-compose.example.yaml for the matching socket-proxy service.
+docker:
+  host: tcp://socket-proxy:2375
+  # Host-local install without a proxy? Use the raw socket instead:
+  # host: unix:///var/run/docker.sock
+  tls:
+    enabled: false
+    cert: ""
+    key: ""
+    ca: ""
+
+# When to scan for updates and when to actually apply them.
+schedule:
+  check: "0 */6 * * *"          # cron expression (used by the future cron-aware scheduler)
+  scan_interval: "6h"           # simple duration form, used by `bulwark run` today
+  maintenance_windows:
+    - start: "02:00"
+      end:   "06:00"
+      days:  [monday, tuesday, wednesday, thursday, friday]
+    - start: "00:00"
+      end:   "23:59"
+      days:  [saturday, sunday]
+
+# Risk classification policy.
+classification:
+  # Fallback risk level when the classifier cannot infer a kind.
+  default_risk: review
+
+  # Phrases in release notes that escalate the assessment to BREAKING.
+  # Leave commented to use the built-in defaults; uncomment to override.
+  # breaking_keywords:
+  #   - "breaking change"
+  #   - "incompatible"
+  #   - "removed support for"
+
+  # Phrases that escalate the assessment to at least REVIEW.
+  # migration_keywords:
+  #   - "migration required"
+  #   - "schema change"
+
+  # Phrases that annotate the assessment but do not change the level.
+  # security_keywords:
+  #   - "cve-"
+  #   - "security fix"
+
+  # Image-repository prefixes published by LSIO-style "rebuilders". For images
+  # from these registries, a digest-only change is treated as a base-image
+  # refresh rather than an opaque update.
+  trusted_rebuilders:
+    - "lscr.io/linuxserver/"
+    - "ghcr.io/linuxserver/"
+
+  # Map ChangeKind to RiskLevel. SAFE → auto-update, REVIEW → notify and
+  # await approval, BREAKING → block until manually forced.
+  policies:
+    patch:        safe
+    minor:        review
+    major:        breaking
+    digest:       safe
+    latest:       review
+    lsio_rebuild: safe
+    prerelease:   review
+
+  # Maximum length of the release-notes excerpt embedded in notifications.
+  changelog_max_chars: 500
+
+# Filesystem-level snapshot integration. Backends: zfs, btrfs, lvm, restic,
+# volume (Docker volume export), or "none" to disable.
+snapshots:
+  backend: none
+  # Secure-by-default guard: `bulwark run --apply` REFUSES to start when no
+  # snapshot backend is configured, because auto-applied SAFE updates would
+  # not be filesystem-recoverable. Configure a backend below, or explicitly
+  # accept container-level rollback only by setting this true.
+  allow_apply_without_backend: false
+  zfs:
+    datasets: []
+  btrfs:
+    subvolumes: []
+  restic:
+    repository: ""
+    password_file: ""
+  # Proxmox VE API backend: snapshots the whole VM/LXC that bulwark runs in
+  # before each apply. Set `backend: proxmox` above to enable.
+  proxmox:
+    url:   ""       # e.g. https://pve.local:8006
+    token: ""       # "user@realm!tokenid=secret" — use ${ENV_VAR} substitution
+    node:  ""       # cluster node the VM/LXC runs on, e.g. pve01
+    vmid:  0        # numeric VM/LXC id to snapshot
+    kind:  qemu     # qemu (default) or lxc
+    # TLS trust for the PVE endpoint. Default (all empty) = host system trust
+    # store — correct for a public/proper CA. Precedence when set:
+    # insecure_skip_verify > ca_file > system store.
+    tls:
+      # Trust a private issuing CA (e.g. step-ca) by PEM path. Recommended
+      # way to trust a self-signed / private-CA PVE endpoint.
+      ca_file: ""
+      # Disable certificate verification entirely. Dev/escape-hatch only; the
+      # daemon logs a warning when true. Prefer ca_file. Default false.
+      insecure_skip_verify: false
+    # DEPRECATED alias for tls.insecure_skip_verify (still honoured, warns).
+    # insecure_tls: false
+  retention:
+    keep_last: 5
+    keep_days: 30
+
+# Post-update health verification. When a container declares its own
+# HEALTHCHECK start_period, that value overrides `timeout` upward so
+# services with slow startup probes aren't rolled back prematurely.
+health:
+  timeout:      120s
+  interval:     5s
+  threshold:    3
+  grace_period: 10s
+
+# Pre / post / rollback update hooks. Container labels
+# (bulwark.hook.pre-update, bulwark.hook.post-update,
+# bulwark.hook.rollback) point at scripts on the host. This block
+# gates which paths are allowed.
+hooks:
+  # When set, only scripts under this directory may run. Paths
+  # supplied via labels that escape the root (symlinks, "..") are
+  # rejected. Empty disables the sandbox — every label-supplied path
+  # is honoured. Strongly recommended for any --apply deployment.
+  hooks_root: ""
+
+# Private-registry credentials. Bulwark resolves credentials in this
+# order: explicit YAML hosts first, then ~/.docker/config.json (if
+# enabled). Hosts not listed here fall through to anonymous pulls.
+registries:
+  # Read auths / credHelpers / credsStore from a Docker CLI config.
+  # When true, `docker login <registry>` on the host is enough; no
+  # YAML credential changes needed.
+  use_docker_config: false
+  # Optional override for the config.json path. Empty defaults to
+  # $HOME/.docker/config.json (the bulwark user's home inside the
+  # container — typically /home/bulwark/.docker/config.json).
+  docker_config_path: ""
+  # Per-host static credentials. Either username + password (Basic
+  # auth, htpasswd-style registries) OR identity_token (OAuth2
+  # refresh token, GHCR / Docker Hub PATs).
+  hosts:
+    # registry.example.com:
+    #   username: my-user
+    #   password: "${REGISTRY_EXAMPLE_PASSWORD}"
+    # ghcr.io:
+    #   identity_token: "${GITHUB_TOKEN}"
+
+# Notification channels. Disabled by default — enable each channel you want.
+notifications:
+  homeassistant:
+    enabled: false
+    url:     "http://homeassistant.example.com:8123"
+    token:   "${BULWARK_HASS_TOKEN}"   # env-var substitution keeps secrets out of YAML
+    safe:
+      persistent: true
+      push:       false
+    review:
+      persistent: true
+      push:       true
+    breaking:
+      persistent: true
+      push:       true
+      critical:   true
+    rollback:
+      persistent: true
+      push:       true
+      critical:   true
+
+  slack:
+    enabled:     false
+    webhook_url: "${BULWARK_SLACK_WEBHOOK}"
+    channel:     ""               # optional override for legacy webhooks
+    min_level:   review           # safe | review | breaking
+
+  discord:
+    enabled:     false
+    webhook_url: "${BULWARK_DISCORD_WEBHOOK}"
+    min_level:   review
+
+  # Arbitrary HTTP webhooks — useful for Home Assistant REST sensors, n8n
+  # workflow triggers, IFTTT-style services, or any tool that accepts JSON.
+  # The list is open-ended; add as many endpoints as you want.
+  generic:
+    - enabled:   false
+      name:      homeassistant
+      url:       "https://homeassistant.example.com/api/webhook/bulwark"
+      method:    POST
+      min_level: review
+      headers:
+        Authorization: "Bearer ${BULWARK_HASS_TOKEN}"
+    - enabled:   false
+      name:      n8n
+      url:       "https://n8n.example.com/webhook/bulwark"
+      min_level: breaking
+
+  smtp:
+    enabled:  false
+    host:     "smtp.example.com"
+    port:     587
+    username: "bulwark@example.com"
+    password: "${BULWARK_SMTP_PASSWORD}"
+    from:     "bulwark@example.com"
+    to:       ["ops@example.com"]
+    tls:      true
+
+  # ntfy push notifications (https://ntfy.sh, self-hostable). Topic is the
+  # bare topic name — no slashes, no whitespace. Token is optional; omit
+  # for public topics. Risk → priority/tag mapping is hardcoded:
+  # BREAKING/rolled-back → priority 5 + rotating_light tag, REVIEW →
+  # priority 4 + warning, SAFE → priority 3 + package.
+  ntfy:
+    enabled:    false
+    server_url: "https://ntfy.sh"     # or https://ntfy.example.com for self-hosted
+    topic:      "bulwark-alerts"
+    token:      "${BULWARK_NTFY_TOKEN}"
+    min_level:  review
+
+  shoutrrr:
+    enabled: false
+    urls:    []
+
+  digest:
+    enabled:  false
+    schedule: "0 8 * * *"
+
+# Per-stack and per-container policy overrides. Container patterns support
+# globs ("*-db" matches "postgres-db", "redis-db", etc.).
+overrides:
+  stacks:
+    # Treat critical infrastructure as breaking by default — never auto-update.
+    authentik:      { risk_override: breaking }
+    home-assistant: { risk_override: breaking }
+    vaultwarden:    { risk_override: breaking }
+  containers:
+    "*-db":
+      risk_override:    review
+      pre_update_hook:  /hooks/db-backup.sh
+    "redis-*":
+      classification_policy:
+        patch: safe
+        minor: safe
+        major: review
+
+# Stacks/containers/images Bulwark must never touch.
+exclude:
+  stacks: []
+  containers: []
+  images: []
+
+# HTTP API and embedded web UI.
+api:
+  enabled: true
+  listen:  ":8080"
+
+  # Authentication for the state API + dashboard. Three modes:
+  #
+  #   none           anonymous; REFUSED on a non-loopback bind unless
+  #                  allow_anonymous: true (secure-by-default; see below)
+  #   bearer         single shared-secret token (machine-to-machine)
+  #   forward-proxy  trust identity headers from a reverse proxy that
+  #                  terminates SSO/MFA upstream (Authelia, Authentik,
+  #                  Pomerium, oauth2-proxy, Cloudflare Access)
+  #
+  # "basic", "oidc", "saml" are NOT yet implemented — for SSO/MFA put
+  # Bulwark behind a reverse proxy that terminates auth and use
+  # forward-proxy mode. See docs/DEPLOY.md for an Authelia recipe.
+  auth:
+    type: none
+
+    # Secure-by-default guard: with type=none, `bulwark serve`/`run` REFUSE to
+    # start when api.listen binds anything other than loopback (127.0.0.1/::1).
+    # Set true ONLY when a trusted reverse proxy terminates auth in front of
+    # Bulwark and you accept anonymous access on the bound interface.
+    allow_anonymous: false
+
+    # For type=bearer
+    token: "${BULWARK_API_TOKEN}"
+
+    # For type=forward-proxy. CIDRs whose connections are allowed to set
+    # identity headers — anything outside is rejected with 403 before the
+    # headers are read, neutralising header-spoofing attacks.
+    trusted_proxies:
+      - 192.0.2.0/24                  # replace with your reverse proxy's network
+    user_header:    Remote-User       # default; override if your proxy uses something else
+    groups_header:  Remote-Groups     # default
+    required_group: ""                # optional; restrict access to one group
+
+  # Per-IP rate limit on every API + dashboard request, including the
+  # DIUN webhook. 0 disables. The default (60 req/min, 10 burst) is
+  # comfortable for human dashboard use + leaves DIUN headroom while
+  # blunting credential-stuffing attempts.
+  rate_limit_per_minute: 60
+
+  # DIUN-compatibility webhook receiver at POST /api/v1/webhooks/diun.
+  # Lets users with existing DIUN deployments plug Bulwark in as the
+  # "brain" without changing their notification setup.
+  diun:
+    # Optional shared secret. When set, DIUN must include it on each call
+    # via Authorization: Bearer <token> or X-Bulwark-Token. Empty = anonymous.
+    # Deliver from a mounted secret with BULWARK_DIUN_TOKEN_FILE (docs/secrets.md).
+    token: "${BULWARK_DIUN_TOKEN}"
+    # Optional HMAC secret. When set, requests must additionally carry
+    # X-Bulwark-Timestamp + X-Bulwark-Signature headers; older-than-5min
+    # signatures are rejected (replay protection). Pair with the
+    # standalone `bulwark-diun-relay` sidecar that signs DIUN's plain
+    # webhook on the way through.
+    hmac_secret: "${BULWARK_DIUN_HMAC_SECRET}"
+    # Per-event silencing when --data-dir is configured. "0" disables.
+    dedup_ttl: "24h"
+
+# CVE / security-urgency axis (opt-in). Adds a "how badly do I need it?"
+# signal alongside the stability classification: when an update closes
+# CRITICAL/HIGH CVEs it is surfaced as security-urgent. Disabled by
+# default and never lowers a stability gate — it only escalates
+# attention. See issue #8 for the full roadmap.
+security:
+  enabled: false
+  severity_threshold: critical   # critical | high (high => critical+high count)
+  auto_apply_urgent_safe: false  # let CRITICAL-closing SAFE updates auto-apply
+  cve_source:
+    type: trivy                  # pluggable; trivy is the first backend
+    trivy:
+      # Directory of `trivy image --format json` reports. Use ${VAR}
+      # substitution so host paths stay out of the committed yaml.
+      report_dir: "${BULWARK_TRIVY_REPORT_DIR}"
+      # server_url: ""           # future: trivy --server mode
+
+# Structured logging configuration.
+logging:
+  level:  info                        # debug | info | warn | error
+  format: json                        # json | text
+
+# ---------------------------------------------------------------------------
+# verify: deploy-time trust gate (opt-in). The trust engine that lets SAFE
+# automation flow with confidence. When enabled, an image must clear the
+# enabled axes before Bulwark applies it: a passing verdict lets the normal
+# SAFE / approved-REVIEW auto-apply proceed, and only a failing block-mode
+# verdict holds the update. Fail-closed by design — an unset signature mode
+# blocks, and an axis that cannot be evaluated blocks rather than passes.
+# Full reference: docs/verify-gate.md
+# ---------------------------------------------------------------------------
+verify:
+  enabled: false                 # opt-in; false == zero behavior change
+  signature:
+    mode: block                  # off | warn | block  (default: block when enabled)
+    # Signature backend. cosign (default) shells out to a PINNED cosign binary;
+    # sigstore-go is experimental and rejected at startup (see docs/the design notes-signature-verifier.md).
+    verifier: cosign
+    # Keyless (Fulcio/OIDC) allowed signers. Any single match trusts the image.
+    identities:
+      - san: "^https://github.com/your-org/.+$"          # regexp matched against the cert SAN
+        issuer: "https://token.actions.githubusercontent.com"
+    # OR key-based verification: a path/ref to a cosign public key. When set,
+    # keyed verification is attempted first. Keep key material OUT of this file
+    # — mount it as a Docker secret and reference the path via ${VAR}.
+    key: ""                      # e.g. "${BULWARK_COSIGN_PUBKEY}"
+    # Pin the cosign binary the gate shells out to, so the gate verifies against a
+    # known-good tool instead of whatever cosign is on PATH. Both version AND digest
+    # are REQUIRED when the signature axis is active — a missing or mismatched binary
+    # fails closed. The digest is public integrity metadata (not a secret); compute it
+    # with: sha256sum "$(command -v cosign)" and confirm against the cosign release
+    # checksums before pinning.
+    cosign:
+      binary: "cosign"           # path to the cosign executable (default: resolve on PATH)
+      version: "2.4.1"           # expected `cosign version` token
+      digest: "sha256:REPLACE_WITH_64_HEX_SHA256_OF_YOUR_COSIGN_BINARY"
+  provenance:                    # the trust engine: SLSA provenance / SBOM attestation axis (opt-in, additive)
+    # Inert until you set a mode or builder_id. Once opted in, an unset mode is
+    # warn (the design notes). Reuses the cosign binary pinned under signature.cosign.
+    mode: warn                   # off | warn | block  (warn on a fresh opt-in)
+    # Trusted builder identity (certificate SAN regexp). An EMPTY builder_id is
+    # never auto-trusted: block degrades to warn until you populate it.
+    builder_id: ""               # e.g. "^https://github.com/your-org/.+$"
+    issuer: ""                   # e.g. "https://token.actions.githubusercontent.com"
+    require_sbom: false          # also look for an SBOM attestation; MISSING is warn-only
+    predicate_types: ["slsaprovenance"]
+  vuln:
+    mode: block                  # off | warn | block  (default: block when a threshold is set)
+    block_threshold: "off"       # off | high | critical — consumes the security.cve_source reports

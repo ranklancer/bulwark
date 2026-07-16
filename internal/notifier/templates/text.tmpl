@@ -1,0 +1,21 @@
+Bulwark scan summary
+{{ range .Events }}
+{{ .Title }}
+  Container: {{ .Container }}
+  Image:     {{ .Image }}
+{{- if or .From .To }}
+  Version:   {{ .From }} -> {{ .To }} ({{ .Kind }})
+{{- end }}
+  Risk:      {{ .Risk }}
+{{- if .Rationale }}
+  Rationale: {{ .Rationale }}
+{{- end }}
+{{- if .StackPeer }}
+  Stack:     skipped due to peer "{{ .StackPeer }}" failure in compose project "{{ .Project }}"
+{{- end }}
+{{- if .ReleaseURL }}
+  Release:   {{ .ReleaseURL }}
+{{- end }}
+{{ end }}
+--
+Bulwark {{ .Now.Format "2006-01-02 15:04:05 UTC" }}

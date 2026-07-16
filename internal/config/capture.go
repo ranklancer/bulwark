@@ -1,0 +1,101 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+)
+
+// CaptureConfig configures the digest pinning digest-pin capture layer (the digest-pin capture design §8.2).
+type CaptureConfig struct {
+	RequireIndex    bool   `yaml:"require_index"`     // multi-arch pins must be index digests
+	Lockfile        string `yaml:"lockfile"`          // pins.json name under --data-dir
+	ComposePinStyle string `yaml:"compose_pin_style"` // inline | lockfile-only (an internal note: inline authoritative)
+	BackupDir       string `yaml:"backup_dir"`        // default <data-dir>/pin-backups
+	Apply           bool   `yaml:"apply"`             // dry-run by default; CLI --apply overrides per run
+}
+
+// SourceConfig declares one container-management backend to capture from. Only
+// the file-based "compose" type is implemented in digest pinning; managed backends
+// (ix-apps/swarm) are recognised by the validator but rejected
+// until their adapter ships, so a config can be forward-declared safely.
+type SourceConfig struct {
+	Name         string   `yaml:"name"`
+	Type         string   `yaml:"type"`         // compose (file) | portainer | ix-apps | komodo | swarm (future)
+	Autodiscover bool     `yaml:"autodiscover"` // detect Dockge/compose layouts on the host
+	Paths        []string `yaml:"paths"`        // dirs / globs / compose files
+	Endpoint     string   `yaml:"endpoint"`     // managed adapters only (API URL)
+	CredsRef     string   `yaml:"creds_ref"`    // Vaultwarden item id (never an inline secret)
+
+	// Dockge (type: dockge) — Paths are stacks roots and Autodiscover enables
+	// probing well-known Dockge locations. ExtraRoots adds candidate roots
+	// (e.g. an additional apps stacks root); DockgeCompose is an optional Dockge
+	// compose file whose stacks bind-mount locates the host stacks root.
+	ExtraRoots    []string `yaml:"extra_roots"`
+	DockgeCompose string   `yaml:"dockge_compose"`
+	// Portainer TLS/transport knobs.
+	AllowInsecureHTTP bool `yaml:"allow_insecure_http"`
+
+	// Portainer / managed adapters (type: portainer) — Endpoint is the API
+	// URL, CredsRef names where the API key lives (env var; never inline), and
+	// EndpointID optionally restricts discovery to one Portainer environment.
+	EndpointID         int    `yaml:"endpoint_id"`
+	CAFile             string `yaml:"ca_file"`
+	InsecureSkipVerify bool   `yaml:"insecure_skip_verify"`
+}
+
+// validateCapture checks the capture/sources block. No-op when unset.
+func (c *Config) validateCapture() error {
+	switch strings.ToLower(strings.TrimSpace(c.Capture.ComposePinStyle)) {
+	case "", "inline", "lockfile-only":
+	default:
+		return fmt.Errorf("capture.compose_pin_style %q is not inline|lockfile-only", c.Capture.ComposePinStyle)
+	}
+	seen := map[string]bool{}
+	for i, src := range c.Sources {
+		name := strings.TrimSpace(src.Name)
+		if name == "" {
+			return fmt.Errorf("sources[%d].name must not be empty", i)
+		}
+		if seen[name] {
+			return fmt.Errorf("sources: duplicate source name %q", name)
+		}
+		seen[name] = true
+		switch strings.ToLower(strings.TrimSpace(src.Type)) {
+		case "", "compose":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: a compose source needs paths or autodiscover: true", name)
+			}
+		case "dockge":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: a dockge source needs paths (stacks roots) or autodiscover: true", name)
+			}
+		case "portainer":
+			if strings.TrimSpace(src.Endpoint) == "" {
+				return fmt.Errorf("sources[%q]: a portainer source needs endpoint (the Portainer API URL)", name)
+			}
+			if strings.TrimSpace(src.CredsRef) == "" {
+				return fmt.Errorf("sources[%q]: a portainer source needs creds_ref (names where the API key lives; never inline the secret)", name)
+			}
+		case "komodo":
+			if strings.TrimSpace(src.Endpoint) == "" {
+				return fmt.Errorf("sources[%q]: a komodo source needs endpoint (the Komodo API URL)", name)
+			}
+			if strings.TrimSpace(src.CredsRef) == "" {
+				return fmt.Errorf("sources[%q]: a komodo source needs creds_ref (names the env var holding \"key:secret\"; never inline the secret)", name)
+			}
+		case "podman-quadlet":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: a podman-quadlet source needs paths (quadlet unit dirs) or autodiscover: true", name)
+			}
+		case "unraid":
+			if len(src.Paths) == 0 && !src.Autodiscover {
+				return fmt.Errorf("sources[%q]: an unraid source needs paths (template dirs) or autodiscover: true", name)
+			}
+		case "ix-apps", "swarm":
+			return fmt.Errorf("sources[%q]: type %q is a managed backend not yet implemented (digest pinning ships the file-based compose adapter only)", name, strings.ToLower(src.Type))
+		default:
+			return fmt.Errorf("sources[%q]: unknown type %q", name, src.Type)
+		}
+	}
+	return nil
+}

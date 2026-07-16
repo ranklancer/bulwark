@@ -1,0 +1,13 @@
+node_modules/
+.vite/
+*.tsbuildinfo
+# tsc -b emits these next to vite.config.ts for the "node project" tsconfig.
+vite.config.d.ts
+vite.config.js
+.env
+.env.local
+# Local-only bundle treemap from `npm run bundle:report`.
+stats.html
+# Lighthouse CI output (local runs of `npm run perf:lighthouse`).
+lhci-output/
+.lighthouseci/

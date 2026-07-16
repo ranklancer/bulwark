@@ -1,0 +1,36 @@
+{
+  "name": "bulwark-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Bulwark dashboard — Vite + React + Tailwind. Builds emit to ../internal/api/ui-react/dist for go:embed.",
+  "scripts": {
+    "dev": "vite",
+    "prebuild": "rm -rf ../internal/api/ui-react/dist/assets",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b --noEmit",
+    "preview": "vite preview",
+    "bundle:report": "vite-bundle-visualizer --output stats.html",
+    "perf:check": "node scripts/perf-budget.mjs",
+    "perf:lighthouse": "npx --yes @lhci/cli@^0.13 autorun"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.27.0",
+    "tailwind-merge": "^2.5.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.5",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.2",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.47",
+    "tailwindcss": "^3.4.13",
+    "typescript": "^5.6.2",
+    "vite": "^6.4.2",
+    "vite-bundle-visualizer": "^1.2.1"
+  }
+}

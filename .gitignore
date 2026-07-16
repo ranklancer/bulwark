@@ -1,0 +1,38 @@
+# Binaries
+/bulwark
+/dist/
+/build/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test artifacts
+*.out
+coverage.txt
+coverage.html
+*.test
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local runtime state
+/data/
+/config/
+*.local.yaml
+*.local.yml
+
+# Environment
+.env
+.env.*
+!.env.example

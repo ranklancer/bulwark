@@ -1,0 +1,29 @@
+# Bulwark — minimal starting config.
+#
+# Pair with `BULWARK_API_TOKEN` in your environment:
+#   export BULWARK_API_TOKEN=$(openssl rand -hex 32)
+#   bulwark run --config bulwark.minimal.yaml --data-dir ./data
+#
+# Then visit http://localhost:8080/ and paste the token at /login.
+#
+# This file is the bare minimum needed to run the daemon in scan-only
+# mode against a local Docker daemon, with a bearer-auth dashboard.
+# Full options live in configs/bulwark.example.yaml; copy that file
+# instead when you want notifications, snapshots, registry auth, etc.
+
+docker:
+  host: unix:///var/run/docker.sock
+
+schedule:
+  scan_interval: "6h"
+
+api:
+  enabled: true
+  listen: ":8080"
+  auth:
+    type: bearer
+    token: "${BULWARK_API_TOKEN}"
+
+logging:
+  level: info
+  format: text

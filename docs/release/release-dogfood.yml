@@ -1,0 +1,89 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# STAGED WORKFLOW — NOT ACTIVE HERE.
+#
+# This file lives under docs/release/ on purpose: a contents-only PAT is
+# contents-only and GitHub rejects any push that adds/edits .github/workflows/*
+# without the `workflow` scope. To activate, copy this file to
+# `.github/workflows/release-dogfood.yml` using a workflow-scoped token.
+# See docs/release/README.md.
+#
+# Supply-chain dogfooding for Bulwark's own releases: multi-arch binaries + a
+# CycloneDX SBOM per artifact (syft) + keyless cosign signatures + SLSA build
+# provenance. All tool versions are pinned (never @latest).
+# ─────────────────────────────────────────────────────────────────────────────
+name: release-dogfood
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the draft release + upload assets
+  id-token: write   # OIDC for keyless cosign + SLSA provenance
+  packages: write
+
+env:
+  GO_VERSION: '1.22'
+  GORELEASER_VERSION: 'v2.3.2'
+  SYFT_VERSION: 'v1.14.0'
+  COSIGN_VERSION: 'v2.4.1'
+
+jobs:
+  goreleaser:
+    name: binaries + SBOM + cosign
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install syft (pinned)
+        uses: anchore/sbom-action/download-syft@v0.17.2
+        with:
+          syft-version: ${{ env.SYFT_VERSION }}
+
+      - name: Install cosign (pinned)
+        uses: sigstore/cosign-installer@v3.6.0
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Validate config
+        uses: goreleaser/goreleaser-action@v6.0.0
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: check
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6.0.0
+        with:
+          version: ${{ env.GORELEASER_VERSION }}
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute artifact hashes for SLSA provenance
+        id: hash
+        run: |
+          cd dist
+          echo "hashes=$(sha256sum bulwark_*_linux_*.tar.gz checksums.txt | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    name: SLSA build provenance
+    needs: [goreleaser]
+    permissions:
+      actions: read
+      id-token: write
+      contents: write
+    # Pinned SLSA generator (produces a signed in-toto/SLSA v1 provenance
+    # attestation over the release artifacts and uploads it to the release).
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    with:
+      base64-subjects: ${{ needs.goreleaser.outputs.hashes }}
+      upload-assets: true
