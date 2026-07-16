@@ -330,6 +330,13 @@ Flags:`)
 		}
 	}
 
+	// Verify-before-pull (the verify-before-pull design): gate the updater's pull step on the same
+	// trust engine the reconcile/admission paths use. Only wire when a gate
+	// exists, so a nil *verify.Gate never becomes a non-nil Verifier interface.
+	if upd != nil && verifyGate != nil {
+		upd.Verify = verifyGate
+	}
+
 	scanJob := func(ctx context.Context) error {
 		if dockerClient == nil {
 			return nil
