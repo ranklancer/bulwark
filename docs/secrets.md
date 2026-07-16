@@ -91,7 +91,7 @@ name and, for I/O failures, the file path (a path is not the secret).
 ```yaml
 services:
   bulwark:
-    image: ghcr.io/bulwark-docker/bulwark:${BULWARK_VERSION}
+    image: ghcr.io/ranklancer/bulwark:${BULWARK_VERSION}
     environment:
       # Point Bulwark at the mounted secret instead of an inline value.
       BULWARK_DIUN_TOKEN_FILE: /run/secrets/diun_token

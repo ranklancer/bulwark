@@ -92,7 +92,7 @@ never appear in tracked config.
 # /opt/bulwark/docker-compose.yaml
 services:
   bulwark:
-    image: ghcr.io/bulwark-docker/bulwark:latest
+    image: ghcr.io/ranklancer/bulwark:latest
     container_name: bulwark
     restart: unless-stopped
     command:
@@ -387,7 +387,7 @@ the relay signs and forwards to Bulwark. Single binary, stdlib only.
 # docker-compose snippet — add alongside Bulwark
 services:
   bulwark-diun-relay:
-    image: ghcr.io/bulwark-docker/bulwark-diun-relay:latest
+    image: ghcr.io/ranklancer/bulwark-diun-relay:latest
     container_name: bulwark-diun-relay
     restart: unless-stopped
     command:
