@@ -28,8 +28,10 @@ import (
 
 	"github.com/ranklancer/bulwark/internal/docker"
 	"github.com/ranklancer/bulwark/internal/hooks"
+	"github.com/ranklancer/bulwark/internal/registry"
 	"github.com/ranklancer/bulwark/internal/snapshot"
 	"github.com/ranklancer/bulwark/internal/snapshot/detect"
+	"github.com/ranklancer/bulwark/internal/verify"
 )
 
 // DockerClient is the subset of *docker.Client the updater drives. The
@@ -87,6 +89,19 @@ type Updater struct {
 
 	// Now is overrideable for deterministic tests.
 	Now func() time.Time
+
+	// Verify, when non-nil, runs a supply-chain verification of the target image
+	// BEFORE the pull step (verify-before-pull, the verify-before-pull design). A block verdict aborts
+	// the update — the image is never pulled onto the host, and no side-effecting
+	// step (pre-update hook, snapshot, recreate) runs. nil disables it (default;
+	// no behaviour change).
+	Verify Verifier
+}
+
+// Verifier is the trust-engine surface the updater consumes to gate a pull before
+// it happens. It is satisfied by *verify.Gate.
+type Verifier interface {
+	Evaluate(ctx context.Context, in verify.Input) verify.Verdict
 }
 
 // Result describes the outcome of one update attempt.
@@ -103,6 +118,16 @@ type Result struct {
 	// been restored. Always empty when no Snapshots backend was active or
 	// no SnapshotTarget was supplied.
 	SnapshotID string
+
+	// VerifyDecision is the verify-before-pull verdict (the verify-before-pull design) when a Verifier
+	// was configured; empty otherwise. VerifyBlocked is true when the pull was
+	// refused because the target failed a block-mode trust axis, or could not be
+	// verified (an unpinned target with a verifier configured).
+	VerifyDecision verify.Decision
+	VerifyBlocked  bool
+	// VerifyBreakGlass is true when a block-mode trust failure was overridden
+	// by a valid, audited break-glass label at the verify-before-pull step.
+	VerifyBreakGlass bool
 
 	Err error
 }
@@ -134,6 +159,12 @@ type ApplyOptions struct {
 	// observing the "bulwark.snapshot.auto" label; explicit
 	// SnapshotTarget always wins.
 	SnapshotAutoInfer bool
+
+	// Labels are the target container's labels, forwarded to the
+	// verify-before-pull trust gate so a label-driven break-glass override is
+	// honored consistently with the deploy-time gate. nil == no labels, so no
+	// override is reachable.
+	Labels map[string]string
 }
 
 // Apply runs the full pull + recreate + verify + (rollback) pipeline.
@@ -181,6 +212,45 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 		ContainerID: insp.ID,
 		OldImage:    insp.ImageRef,
 		NewImage:    targetImage,
+	}
+
+	// --- 1.4. Verify-before-pull (the verify-before-pull design) ---------------------------------
+	// Verify the target's supply-chain attestations BEFORE any pull or side
+	// effect. A block verdict aborts the update with NO pull; a configured
+	// verifier also refuses an unpinned target (attestations bind to a digest,
+	// not a mutable tag). nil verifier skips this entirely.
+	if u.Verify != nil {
+		if !isDigestPinned(targetImage) {
+			res.VerifyBlocked = true
+			res.Err = fmt.Errorf("verify-before-pull: target %q is not digest-pinned; refusing to pull an unverifiable image", targetImage)
+			logger.Warn("updater: verify-before-pull refused unpinned target; NOT pulling",
+				"container", originalName, "image", targetImage)
+			return res
+		}
+		verdict := u.Verify.Evaluate(ctx, verify.Input{PinnedRef: targetImage, Labels: opts.Labels})
+		res.VerifyDecision = verdict.Decision
+		if verdict.Blocked() {
+			res.VerifyBlocked = true
+			res.Err = fmt.Errorf("verify-before-pull: blocked — %s", verdict.Summary())
+			logger.Warn("updater: verify-before-pull BLOCKED; NOT pulling",
+				"container", originalName, "image", targetImage, "reason", verdict.Summary())
+			return res
+		}
+		if verdict.Decision == verify.DecisionBreakGlass {
+			res.VerifyBreakGlass = true
+			reason := ""
+			if verdict.BreakGlass != nil {
+				reason = verdict.BreakGlass.Reason
+			}
+			// Audit the override at the pull boundary; the deploy-time gate
+			// records the store audit event, this closes the loop at pull.
+			logger.Warn("updater: verify-before-pull OVERRIDDEN by break-glass; pulling",
+				"container", originalName, "image", targetImage,
+				"reason", reason, "detail", verdict.Summary())
+		} else {
+			logger.Info("updater: verify-before-pull passed",
+				"container", originalName, "image", targetImage, "decision", string(verdict.Decision))
+		}
 	}
 
 	// --- 1.5. Pre-update hook ----------------------------------------------
@@ -338,6 +408,13 @@ func (u *Updater) ApplyWithOptions(ctx context.Context, containerID, targetImage
 
 // trimHookOutput is a tiny helper for surfacing hook stdout/stderr in
 // log lines without dumping kilobytes.
+// isDigestPinned reports whether ref carries a canonical @sha256:<64hex> digest —
+// verify-before-pull can only attest a digest-bound reference, not a mutable tag.
+func isDigestPinned(ref string) bool {
+	at := strings.LastIndex(ref, "@")
+	return at >= 0 && registry.IsSHA256Digest(strings.ToLower(ref[at+1:]))
+}
+
 func trimHookOutput(b []byte) string {
 	if len(b) > 256 {
 		return strings.TrimSpace(string(b[:256])) + "..."

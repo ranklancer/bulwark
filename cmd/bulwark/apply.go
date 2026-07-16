@@ -166,6 +166,8 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 		opts.PreUpdateHook = r.Container.Labels["bulwark.hook.pre-update"]
 		opts.PostUpdateHook = r.Container.Labels["bulwark.hook.post-update"]
 		opts.RollbackHook = r.Container.Labels["bulwark.hook.rollback"]
+		// Forward labels so verify-before-pull honors a break-glass override.
+		opts.Labels = r.Container.Labels
 		logger.Info("apply: starting", "container", r.Container.Name, "image", r.Container.Image, "level", r.Assessment.Level.String(), "snapshot_target", opts.SnapshotTarget, "project", project)
 		res := u.ApplyWithOptions(ctx, r.Container.ID, r.Reference.String(), opts)
 		oc := applyOutcome{

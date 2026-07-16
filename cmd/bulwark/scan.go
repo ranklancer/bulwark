@@ -203,6 +203,12 @@ Flags:`)
 				Logger:        logger,
 				HealthTimeout: *healthTimeout,
 			}
+			// verify-before-pull (the verify-before-pull design): --apply must respect the same trust
+			// gate the daemon uses; without this, scan --apply would silently
+			// pull unverified images.
+			if err := attachVerifyGate(upd, loaded); err != nil {
+				return fmt.Errorf("scan: verify: %w", err)
+			}
 		} else if deps.Updater != nil {
 			upd = deps.Updater
 		} else {
@@ -740,4 +746,21 @@ func isLikelyTTY(w io.Writer) bool {
 		return false
 	}
 	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// attachVerifyGate wires the verify-before-pull trust gate onto upd when the
+// config enables verification, so `scan --apply` cannot silently bypass the
+// gate the daemon uses. It is a no-op when upd or loaded is nil or when
+// verification is disabled, and fails closed (returns the error) on a broken
+// gate build.
+func attachVerifyGate(upd *updater.Updater, loaded *config.Config) error {
+	if upd == nil || loaded == nil || !loaded.Verify.Enabled {
+		return nil
+	}
+	gate, err := buildVerifyGate(loaded)
+	if err != nil {
+		return err
+	}
+	upd.Verify = gate
+	return nil
 }
