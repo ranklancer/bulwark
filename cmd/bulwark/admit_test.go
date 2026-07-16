@@ -177,3 +177,56 @@ func TestCmdAdmit_PinStoreUnresolvedVarBaseRejected(t *testing.T) {
 		t.Fatalf("must not emit a malformed doubled-@ pinned reference:\n%s", out.String())
 	}
 }
+
+func TestComposeStorePin_FailsClosed(t *testing.T) {
+	good := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	cases := []struct {
+		name    string
+		base    string
+		digest  string
+		wantOK  bool
+		wantRef string
+	}{
+		{"clean tag ref", "redis:7", good, true, "redis:7@" + good},
+		{"clean repo ref", "docker.io/library/nginx:1.27", good, true, "docker.io/library/nginx:1.27@" + good},
+		{"bare $VAR base", "nginx@$DIGEST", good, false, ""},
+		{"braced ${VAR} base", "nginx@${DIGEST}", good, false, ""},
+		{"bare $VAR in tag", "nginx:$TAG", good, false, ""},
+		{"base already has @ (doubled)", "nginx@sha256:short", good, false, ""},
+		{"base already digest-pinned", "nginx@" + good, good, false, ""},
+		{"malformed stored digest", "redis:7", "sha256:short", false, ""},
+		{"empty stored digest", "redis:7", "", false, ""},
+		{"unparseable base", "not a ref!!", good, false, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ref, ok := composeStorePin(tc.base, tc.digest)
+			if ok != tc.wantOK {
+				t.Fatalf("composeStorePin(%q,%q) ok=%v, want %v (ref=%q)", tc.base, tc.digest, ok, tc.wantOK, ref)
+			}
+			if ok && ref != tc.wantRef {
+				t.Fatalf("ref=%q, want %q", ref, tc.wantRef)
+			}
+			if !ok && ref != "" {
+				t.Fatalf("fail-closed must return empty ref, got %q", ref)
+			}
+		})
+	}
+}
+
+func TestAdmitPinState_BareVarBaseFailsClosed(t *testing.T) {
+	// #67: a bare $VAR in the written ref (no braces) with a store digest and
+	// no captured Ref must NOT compose a doubled-@ ref reported as pinned.
+	ps := store.OpenPinStore(t.TempDir())
+	if err := ps.Set("stack/app", store.PinRecord{IndexDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
+		t.Fatal(err)
+	}
+	pinned, ref, src := admitPinState(
+		capture.ImageRef{Service: "app", Raw: "nginx@$DIGEST", Ref: "nginx@$DIGEST"}, "stack", ps)
+	if pinned {
+		t.Fatalf("bare-$VAR base must fail closed (unpinned), got pinned=true ref=%q src=%q", ref, src)
+	}
+	if strings.Contains(ref, "@sha256:") && strings.Contains(ref, "$") {
+		t.Fatalf("must not emit a doubled-@/placeholder ref: %q", ref)
+	}
+}

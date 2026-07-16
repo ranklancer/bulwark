@@ -93,3 +93,23 @@ in the safe direction: an unresolved `${VAR}`, or a var that expands to a tag (n
 digest), reads as **UNPINNED**. Residual `T-env-drift`: a shell override at deploy
 could differ from `.env`; run `admit` in the same environment as `up`, and hard-pin
 the digest for the strongest guarantee. See the admission-gate design §12.
+
+## Pin-store composition (fail-closed)
+
+`pinned(store)` composes a digest-pinned reference from a captured base ref and
+the digest recorded by `bulwark capture`. This composition is **fail-closed**: a
+store pin is reported only when a well-formed reference can be *positively*
+constructed. The base is rejected — the image reads **UNPINNED** rather than
+emitting a malformed reference — when it:
+
+| Rejected base | Why |
+|---|---|
+| carries any `$` — `${VAR}`, `${VAR:-def}`, or a bare `$VAR` | an unexpanded variable can't be attested; `$` is never valid in an image reference |
+| already contains `@` (e.g. `img@sha256:short`) | splicing a digest would produce a doubled `@sha256:` |
+| carries a character outside `registry[:port]/name[:tag]` | junk/whitespace/shell metacharacters must not be spliced |
+| pairs with a non-canonical stored digest (not `sha256:<64hex>`) | only a canonical digest is ever composed |
+
+This closes a fail-open where a bare `$VAR` base (which the earlier `${`-only
+guard missed) would compose a malformed `img@$VAR@sha256:…` reference and still
+report `pinned=true`. Under `--pin-mode block` an unverifiable base now blocks;
+under `warn` it is surfaced. The composition never reports a pin it cannot attest.
