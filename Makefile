@@ -61,13 +61,15 @@ sec:
 	@command -v $(GOBIN)/gosec >/dev/null 2>&1 || { echo "gosec missing — run: make tools"; exit 1; }
 	$(GOBIN)/gosec -quiet ./...
 
-# Coverage floor (blocking). Fails when total statement coverage drops below
-# COVER_MIN. Current baseline ~75.1%.
+# Coverage floor (blocking) — RISK-TIERED, per package. See
+# docs/the design notes-testing-quality-tiers.md. Security/logic packages carry an 85%
+# target floor, the config/configstore/notifier base tier 74%, and genuine
+# boilerplate (pkg/types, cmd/*, internal/api/ui) is excluded from the metric
+# rather than padded with hollow tests. Floors RATCHET up as behavioural tests
+# land; they never decrease. COVER_MIN is the total (excl. boilerplate) backstop.
 cover:
 	@go test -covermode=atomic -coverprofile=/tmp/bulwark.cov ./... >/dev/null
-	@tot=$$(go tool cover -func=/tmp/bulwark.cov | awk '/^total:/ {gsub(/%/,"",$$NF); print $$NF}'); \
-	echo "total coverage: $$tot% (floor $(COVER_MIN)%)"; \
-	awk -v t="$$tot" -v m="$(COVER_MIN)" 'BEGIN { exit (t+0 < m+0) ? 1 : 0 }' || { echo "coverage $$tot% is below floor $(COVER_MIN)%"; exit 1; }
+	@bash scripts/coverage-floors.sh /tmp/bulwark.cov $(COVER_MIN)
 
 # Extended gate: base gate + static analysis + coverage floor.
 #
