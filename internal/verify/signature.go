@@ -122,11 +122,6 @@ func (c *CosignVerifier) resolveBinPath() (string, error) {
 	return lp(b)
 }
 
-// pinned reports whether any pin is configured.
-func (c *CosignVerifier) pinned() bool {
-	return strings.TrimSpace(c.Version) != "" || normalizeDigest(c.Digest) != ""
-}
-
 // ensureIntegrity verifies the pinned cosign binary once, before first use. It
 // is fail-closed: any inability to confirm the pin returns an error. Success is
 // memoized; a failure is retried on the next call.
