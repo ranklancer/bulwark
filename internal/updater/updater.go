@@ -167,13 +167,6 @@ type ApplyOptions struct {
 	Labels map[string]string
 }
 
-// Apply runs the full pull + recreate + verify + (rollback) pipeline.
-// The targetImage is the new image reference. ApplyOptions can be passed
-// via ApplyWithOptions; this method delegates with zero options.
-func (u *Updater) Apply(ctx context.Context, containerID, targetImage string) Result {
-	return u.ApplyWithOptions(ctx, containerID, targetImage, ApplyOptions{})
-}
-
 // ApplyWithOptions runs the full update pipeline with the specified options.
 // The returned Result is always non-zero — Err is set when the update was
 // not successful (whether or not rollback succeeded).

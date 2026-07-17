@@ -190,7 +190,7 @@ func TestApply_HappyPath_NoHealthcheck(t *testing.T) {
 	origCreate := fd.CreateContainer
 	_ = origCreate
 
-	res := u.Apply(context.Background(), "old-id", "lscr.io/linuxserver/sonarr:4.0.11-ls47")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "lscr.io/linuxserver/sonarr:4.0.11-ls47", ApplyOptions{})
 
 	if res.Err != nil {
 		t.Fatalf("Apply returned err: %v\nops: %v", res.Err, fd.ops)
@@ -251,7 +251,7 @@ func TestApply_HappyPath_WithHealthcheck(t *testing.T) {
 		HealthInterval: 1 * time.Millisecond,
 		HealthTimeout:  100 * time.Millisecond,
 	}
-	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:2.0", ApplyOptions{})
 	if res.Err != nil {
 		t.Fatalf("Apply: %v\nops: %v", res.Err, fd.ops)
 	}
@@ -439,7 +439,7 @@ func TestApply_RollbackOnUnhealthy(t *testing.T) {
 		HealthInterval: 1 * time.Millisecond,
 		HealthTimeout:  100 * time.Millisecond,
 	}
-	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:2.0", ApplyOptions{})
 	if res.Err == nil {
 		t.Fatal("expected error when health is Unhealthy")
 	}
@@ -475,7 +475,7 @@ func TestApply_RollbackOnStartFailure(t *testing.T) {
 		HealthInterval: 1 * time.Millisecond,
 		HealthTimeout:  100 * time.Millisecond,
 	}
-	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:2.0", ApplyOptions{})
 	// First start (the new container) fails; second start (the old one,
 	// during rollback) is also configured to fail because failurePoints is
 	// shared. That's fine — the test asserts the rollback sequence is
@@ -500,7 +500,7 @@ func TestApply_PullFailure_AbortsBeforeAnyMutation(t *testing.T) {
 		failurePoints: map[string]error{"pull": errors.New("manifest unknown")},
 	}
 	u := &Updater{Docker: fd}
-	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:9.9.9")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:9.9.9", ApplyOptions{})
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "manifest unknown") {
 		t.Fatalf("expected pull error, got %v", res.Err)
 	}
@@ -525,7 +525,7 @@ func TestApply_RenameFailure_TriesToStartOldBackUp(t *testing.T) {
 		failurePoints: map[string]error{"rename": errors.New("name conflict")},
 	}
 	u := &Updater{Docker: fd}
-	res := u.Apply(context.Background(), "old-id", "ghcr.io/owner/app:2.0")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "ghcr.io/owner/app:2.0", ApplyOptions{})
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "rename old") {
 		t.Fatalf("expected rename error, got %v", res.Err)
 	}
@@ -539,7 +539,7 @@ func TestApply_RenameFailure_TriesToStartOldBackUp(t *testing.T) {
 func TestApply_InspectMissingContainerErrors(t *testing.T) {
 	fd := &fakeDocker{containers: map[string]*docker.ContainerInspect{}}
 	u := &Updater{Docker: fd}
-	res := u.Apply(context.Background(), "absent", "x:1")
+	res := u.ApplyWithOptions(context.Background(), "absent", "x:1", ApplyOptions{})
 	if res.Err == nil || !strings.Contains(res.Err.Error(), "not found") {
 		t.Errorf("expected not-found error, got %v", res.Err)
 	}

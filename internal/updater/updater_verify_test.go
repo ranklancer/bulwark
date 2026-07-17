@@ -33,7 +33,7 @@ func TestVerifyBeforePull_BlockAbortsPull(t *testing.T) {
 		"old-id": sampleInspect("old-id", "sonarr", "lscr.io/linuxserver/sonarr:4.0.10-ls45"),
 	}}
 	u := &Updater{Docker: fd, Verify: fakeVerifier{decision: verify.DecisionBlock}}
-	res := u.Apply(context.Background(), "old-id", pinnedTarget)
+	res := u.ApplyWithOptions(context.Background(), "old-id", pinnedTarget, ApplyOptions{})
 	if !res.VerifyBlocked || res.Err == nil {
 		t.Fatalf("block verdict must abort the update: VerifyBlocked=%v err=%v", res.VerifyBlocked, res.Err)
 	}
@@ -52,7 +52,7 @@ func TestVerifyBeforePull_UnpinnedFailsClosed(t *testing.T) {
 	// A configured verifier + a mutable-tag target => fail closed (no pull),
 	// regardless of what the verifier would say — we cannot attest an unpinned ref.
 	u := &Updater{Docker: fd, Verify: fakeVerifier{decision: verify.DecisionAllow}}
-	res := u.Apply(context.Background(), "old-id", "lscr.io/linuxserver/sonarr:4.0.11-ls47")
+	res := u.ApplyWithOptions(context.Background(), "old-id", "lscr.io/linuxserver/sonarr:4.0.11-ls47", ApplyOptions{})
 	if !res.VerifyBlocked || res.Err == nil {
 		t.Fatalf("unpinned target with a verifier must fail closed: %+v", res)
 	}
@@ -73,7 +73,7 @@ func TestVerifyBeforePull_AllowProceeds(t *testing.T) {
 		HealthTimeout:  100 * time.Millisecond,
 		Verify:         fakeVerifier{decision: verify.DecisionAllow},
 	}
-	res := u.Apply(context.Background(), "old-id", pinnedTarget)
+	res := u.ApplyWithOptions(context.Background(), "old-id", pinnedTarget, ApplyOptions{})
 	if res.Err != nil {
 		t.Fatalf("allow verdict must proceed to pull: %v\nops=%v", res.Err, fd.ops)
 	}
