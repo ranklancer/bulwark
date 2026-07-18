@@ -60,7 +60,10 @@ func loadPin(dataDir, key string) (*store.PinStore, store.PinRecord, error) {
 		return nil, store.PinRecord{}, errors.New("--data-dir is required")
 	}
 	ps := store.OpenPinStore(dataDir)
-	rec, ok := ps.Get(key)
+	rec, ok, err := ps.Get(key)
+	if err != nil {
+		return nil, store.PinRecord{}, fmt.Errorf("cannot determine pin state for %q: %w", key, err)
+	}
 	if !ok {
 		return nil, store.PinRecord{}, fmt.Errorf("no pin recorded for %q (capture --apply it first)", key)
 	}

@@ -91,6 +91,18 @@ type Image struct {
 	PinnedRef string            // the digest-pinned reference handed to the trust engine (== Ref when already pinned)
 	PinSource string            // provenance of the pin: "literal" | "var" (${VAR}/.env-resolved) | "store" | "" (unpinned)
 	Labels    map[string]string // container labels; a valid break-glass lives here (passed to verify)
+
+	// PinStoreErr, when non-nil, means the pin-store read/parse for this
+	// image failed (the admission-gate design fail-closed pin-state model, case 3): the pin
+	// state is UNKNOWN, NOT "unpinned". This is distinct from a healthy
+	// store that genuinely has no pin recorded (case 2, PinStoreErr==nil,
+	// Pinned==false), which keeps existing --pin-mode policy unchanged.
+	// Engine.Admit forces a BLOCK decision for this image whenever
+	// PinStoreErr is set, regardless of Policy.Pin (warn/off/block all
+	// block), and skips the trust axis entirely since it cannot know
+	// whether the image was pinned. Set by cmd/bulwark/admit.go from the
+	// error admitPinState receives off store.PinStore.Get.
+	PinStoreErr error
 }
 
 // ImageResult is the per-image admission outcome.
@@ -153,6 +165,22 @@ func (e Engine) Admit(ctx context.Context, images []Image) Verdict {
 	results := make([]ImageResult, 0, len(images))
 	for _, img := range images {
 		r := ImageResult{Service: img.Service, Ref: img.Ref, Pinned: img.Pinned, PinSource: img.PinSource, Decision: DecisionAllow}
+
+		if img.PinStoreErr != nil {
+			// Fail closed irrespective of --pin-mode (case 3 of the admission-gate design
+			// pin-state model): a pin-store read/parse error means we
+			// cannot determine whether this image was pinned, so we must
+			// not silently treat it as "unpinned" -- under warn/off that
+			// would admit the deploy and skip the trust axis on a possibly
+			// genuinely-pinned, previously-trusted image. The reason is
+			// deliberately generic (never the raw filesystem error) so it
+			// cannot leak local paths into the admission report.
+			r.Decision = DecisionBlock
+			r.Reasons = append(r.Reasons, "pin: cannot determine pin state (pin-store read failed, failing closed)")
+			agg = worse(agg, r.Decision)
+			results = append(results, r)
+			continue
+		}
 
 		if !img.Pinned {
 			switch e.Policy.Pin {

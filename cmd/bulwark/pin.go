@@ -71,7 +71,10 @@ func cmdPinRollback(args []string, stdout, stderr io.Writer) error {
 		return errors.New("pin rollback: --data-dir is required")
 	}
 	ps := store.OpenPinStore(*dataDir)
-	rec, ok := ps.Get(rest[0])
+	rec, ok, err := ps.Get(rest[0])
+	if err != nil {
+		return fmt.Errorf("pin rollback: cannot determine pin state for %q: %w", rest[0], err)
+	}
 	if !ok {
 		return fmt.Errorf("pin rollback: no pin recorded for %q", rest[0])
 	}

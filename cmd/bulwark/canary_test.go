@@ -56,7 +56,7 @@ func TestCmdCanary_Lifecycle(t *testing.T) {
 	if err := cmdCanaryWith([]string{"promote", "--data-dir", dataDir, key}, &out, &eb, blockGate); err == nil {
 		t.Error("promote must be refused on a block verdict")
 	}
-	if rec, _ := store.OpenPinStore(dataDir).Get(key); rec.CanaryState != store.CanaryActive {
+	if rec, _, _ := store.OpenPinStore(dataDir).Get(key); rec.CanaryState != store.CanaryActive {
 		t.Errorf("state after refused promote = %q, want canary", rec.CanaryState)
 	}
 
@@ -66,7 +66,7 @@ func TestCmdCanary_Lifecycle(t *testing.T) {
 	if err := cmdCanaryWith([]string{"promote", "--data-dir", dataDir, key}, &out, &eb, allowGate); err != nil {
 		t.Fatalf("promote allow: %v", err)
 	}
-	if rec, _ := store.OpenPinStore(dataDir).Get(key); rec.CanaryState != store.CanaryPromoted {
+	if rec, _, _ := store.OpenPinStore(dataDir).Get(key); rec.CanaryState != store.CanaryPromoted {
 		t.Errorf("state after promote = %q, want promoted", rec.CanaryState)
 	}
 
@@ -79,7 +79,7 @@ func TestCmdCanary_Lifecycle(t *testing.T) {
 	if string(got) != orig {
 		t.Errorf("rollback did not restore original:\n got %q\nwant %q", got, orig)
 	}
-	if rec, _ := store.OpenPinStore(dataDir).Get(key); rec.CanaryState != store.CanaryRolledBack {
+	if rec, _, _ := store.OpenPinStore(dataDir).Get(key); rec.CanaryState != store.CanaryRolledBack {
 		t.Errorf("state after rollback = %q, want rolled-back", rec.CanaryState)
 	}
 }
@@ -106,7 +106,7 @@ func TestCmdCanary_RollbackRefusesManagedPin(t *testing.T) {
 	if !strings.Contains(err.Error(), "MANUAL ROLLBACK REQUIRED") {
 		t.Errorf("error must loudly require manual rollback, got: %v", err)
 	}
-	if rec, _ := ps.Get(key); rec.CanaryState == store.CanaryRolledBack {
+	if rec, _, _ := ps.Get(key); rec.CanaryState == store.CanaryRolledBack {
 		t.Error("a managed pin must NOT be marked rolled-back (false success)")
 	}
 }
