@@ -221,8 +221,11 @@ func TestAdmitPinState_BareVarBaseFailsClosed(t *testing.T) {
 	if err := ps.Set("stack/app", store.PinRecord{IndexDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}); err != nil {
 		t.Fatal(err)
 	}
-	pinned, ref, src := admitPinState(
+	pinned, ref, src, err := admitPinState(
 		capture.ImageRef{Service: "app", Raw: "nginx@$DIGEST", Ref: "nginx@$DIGEST"}, "stack", ps)
+	if err != nil {
+		t.Fatalf("unexpected pin-store error: %v", err)
+	}
 	if pinned {
 		t.Fatalf("bare-$VAR base must fail closed (unpinned), got pinned=true ref=%q src=%q", ref, src)
 	}

@@ -54,6 +54,12 @@ func OpenPinStore(dataDir string) *PinStore {
 	return &PinStore{path: filepath.Join(dataDir, "pins.json")}
 }
 
+// load reads and parses the pins file. A missing file is a legitimate,
+// error-free empty store (case 2 of the 3-case pin-state model: nothing has
+// ever been captured yet). A file that exists but cannot be read or parsed
+// returns a non-nil error (case 3: the pin state is UNKNOWN, not "empty") --
+// callers MUST propagate that distinction rather than collapsing it into
+// not-found. See Get.
 func (s *PinStore) load() (pinsFile, error) {
 	pf := pinsFile{Version: pinsSchemaVersion, Pins: map[string]PinRecord{}}
 	data, err := os.ReadFile(s.path)
@@ -106,16 +112,29 @@ func (s *PinStore) Set(key string, rec PinRecord) error {
 	return s.save(pf)
 }
 
-// Get returns the pin for key.
-func (s *PinStore) Get(key string) (PinRecord, bool) {
+// Get returns the pin for key, distinguishing three outcomes (the admission-gate design
+// fail-closed pin-state model):
+//
+//  1. ok=true, err=nil:  key is pinned; rec is populated.
+//  2. ok=false, err=nil: the store loaded fine (including a store that does
+//     not exist yet -- a fresh install) but genuinely has no pin recorded
+//     for key. This is legitimate not-found; existing --pin-mode policy
+//     (warn/off/block) applies unchanged.
+//  3. ok=false, err!=nil: the store's underlying file exists but could not
+//     be read or parsed (corruption, bad permissions, a writer crashing
+//     mid-rename, etc.). The pin state for key is UNKNOWN -- callers MUST
+//     NOT treat this the same as case 2. Callers that gate a security
+//     decision on pin state (cmd/bulwark/admit.go) must fail closed on a
+//     non-nil error regardless of any configured enforcement mode.
+func (s *PinStore) Get(key string) (PinRecord, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pf, err := s.load()
 	if err != nil {
-		return PinRecord{}, false
+		return PinRecord{}, false, err
 	}
 	r, ok := pf.Pins[key]
-	return r, ok
+	return r, ok, nil
 }
 
 // List returns all pins keyed by "<stack>/<service>".

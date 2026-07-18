@@ -81,7 +81,19 @@ func cmdAdmitWith(args []string, stdout, stderr io.Writer, gate admit.TrustGate)
 		}
 		for _, r := range refs {
 			img := admit.Image{Service: r.Service, Ref: r.Raw}
-			img.Pinned, img.PinnedRef, img.PinSource = admitPinState(r, name, pins)
+			pinned, pinnedRef, source, perr := admitPinState(r, name, pins)
+			img.Pinned, img.PinnedRef, img.PinSource = pinned, pinnedRef, source
+			if perr != nil {
+				// Case 3 (the admission-gate design fail-closed pin-state model): the pin store's
+				// underlying file could not be read or parsed for this image, so
+				// its pin state is UNKNOWN. admit.Image.PinStoreErr makes
+				// Engine.Admit fail closed regardless of --pin-mode. The raw
+				// filesystem error (which can embed local paths) goes to stderr
+				// only, for operator diagnosis -- never into the admission
+				// report on stdout/JSON.
+				img.PinStoreErr = perr
+				fmt.Fprintf(stderr, "admit: warning: pin-store read failed for %s/%s: %v\n", name, r.Service, perr)
+			}
 			images = append(images, img)
 		}
 	}
@@ -108,15 +120,23 @@ func cmdAdmitWith(args []string, stdout, stderr io.Writer, gate admit.TrustGate)
 // stackName(path)/<service> key ("store"). r.Raw is the PRE-expansion literal, so
 // the literal check never mistakes a var-sourced digest for a hard-coded one, and
 // an unresolved ${VAR} (no .env value) yields no digest — read as unpinned.
-func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pinned bool, pinnedRef, source string) {
+func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pinned bool, pinnedRef, source string, storeErr error) {
 	if hasSHA256Digest(r.Raw) {
-		return true, r.Raw, "literal"
+		return true, r.Raw, "literal", nil
 	}
 	if exp := strings.TrimSpace(r.Ref); exp != "" && exp != strings.TrimSpace(r.Raw) && hasSHA256Digest(exp) {
-		return true, exp, "var"
+		return true, exp, "var", nil
 	}
 	if pins != nil {
-		if rec, ok := pins.Get(target + "/" + r.Service); ok && strings.TrimSpace(rec.IndexDigest) != "" {
+		rec, ok, err := pins.Get(target + "/" + r.Service)
+		if err != nil {
+			// Pin-store read/parse error (case 3): the pin state for this
+			// image is UNKNOWN, distinct from "genuinely never pinned"
+			// (ok=false, err=nil). The caller (cmdAdmitWith) fails closed on
+			// this via admit.Image.PinStoreErr regardless of --pin-mode.
+			return false, r.Raw, "", err
+		}
+		if ok && strings.TrimSpace(rec.IndexDigest) != "" {
 			base := r.Raw
 			if strings.TrimSpace(rec.Ref) != "" {
 				base = rec.Ref // the captured repo ref, never a raw ${VAR} literal
@@ -129,11 +149,11 @@ func admitPinState(r capture.ImageRef, target string, pins *store.PinStore) (pin
 			// stored digest, or an unparseable base. Anything it cannot attest
 			// falls through to unpinned rather than emitting a malformed ref.
 			if pinnedRef, ok := composeStorePin(base, rec.IndexDigest); ok {
-				return true, pinnedRef, "store"
+				return true, pinnedRef, "store", nil
 			}
 		}
 	}
-	return false, r.Raw, ""
+	return false, r.Raw, "", nil
 }
 
 // hasSHA256Digest reports whether ref carries a canonical @sha256:<64hex> digest.
