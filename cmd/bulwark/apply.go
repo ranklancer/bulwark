@@ -169,7 +169,17 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 		// Forward labels so verify-before-pull honors a break-glass override.
 		opts.Labels = r.Container.Labels
 		logger.Info("apply: starting", "container", r.Container.Name, "image", r.Container.Image, "level", r.Assessment.Level.String(), "snapshot_target", opts.SnapshotTarget, "project", project)
-		res := u.ApplyWithOptions(ctx, r.Container.ID, r.Reference.String(), opts)
+		// Pass the SAME digest-pinned target the trust gate above just verified
+		// (pinnedRef(r), the identical helper used at the gate call ~30 lines up)
+		// rather than the unpinned r.Reference.String(). The real scanner never
+		// digest-pins Reference -- it stores the registry digest separately in
+		// RegistryDigest -- so passing Reference.String() here meant the updater's
+		// own verify-before-pull digest check (internal/updater/updater.go) would
+		// refuse EVERY real update once verify was enabled: it verified
+		// pinnedRef(r) but was asked to pull an unpinned tag. pinnedRef falls back
+		// to the unpinned ref when RegistryDigest is empty, so this stays
+		// fail-closed -- it never fabricates a digest pin that isn't there.
+		res := u.ApplyWithOptions(ctx, r.Container.ID, pinnedRef(r), opts)
 		oc := applyOutcome{
 			NewImage:   res.NewImage,
 			OldImage:   res.OldImage,
