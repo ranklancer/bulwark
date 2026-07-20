@@ -24,7 +24,7 @@ services:
   # The ONLY container that touches the Docker socket. It exposes a filtered,
   # mostly read-only slice of the Docker API to Bulwark over TCP.
   socket-proxy:
-    image: tecnativa/docker-socket-proxy:0.3.0   # pinned
+    image: tecnativa/docker-socket-proxy:0.3.0@sha256:9e4b9e7517a6b660f2cc903a19b257b1852d5b3344794e3ea334ff00ae677ac2   # pinned
     container_name: bulwark-socket-proxy
     restart: unless-stopped
     environment:
