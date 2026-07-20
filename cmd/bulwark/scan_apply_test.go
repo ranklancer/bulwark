@@ -573,7 +573,7 @@ func TestScanApply_ComposeStack_AppliesDepsBeforeDependents(t *testing.T) {
 	if len(order) != 2 {
 		t.Fatalf("pull order = %v, want 2 entries", order)
 	}
-	if order[0] != "ghcr.io/owner/db:1.0" || order[1] != "ghcr.io/owner/web:1.0" {
+	if order[0] != "ghcr.io/owner/db:1.0@sha256:new-db" || order[1] != "ghcr.io/owner/web:1.0@sha256:new-web" {
 		t.Errorf("dependency-first violated: pull order = %v", order)
 	}
 }

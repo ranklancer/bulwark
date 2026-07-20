@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 
 	"github.com/ranklancer/bulwark/internal/api"
 	"github.com/ranklancer/bulwark/internal/configstore"
@@ -120,7 +119,7 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 				logger.Warn("apply: blocked by trust gate", "container", r.Container.Name, "image", r.Container.Image, "reason", detail)
 				st.Audit(store.AuditEvent{Action: store.ActionApplyBlocked, Container: r.Container.Name, Image: r.Container.Image, Level: r.Assessment.Level, Digest: r.RegistryDigest, Detail: detail})
 				bus.Publish(api.Event{Type: api.EventApplyBlocked, Container: r.Container.Name, Image: r.Container.Image, Detail: detail})
-				out[r.Container.Name] = applyOutcome{Blocked: true, OldImage: r.Container.Image, NewImage: r.Reference.String()}
+				out[r.Container.Name] = applyOutcome{Blocked: true, OldImage: r.Container.Image, NewImage: pinnedRef(r)}
 				continue
 			case verify.DecisionBreakGlass:
 				reason := ""
@@ -169,7 +168,17 @@ func applyEligibleUpdates(ctx context.Context, results []scanner.Result, u *upda
 		// Forward labels so verify-before-pull honors a break-glass override.
 		opts.Labels = r.Container.Labels
 		logger.Info("apply: starting", "container", r.Container.Name, "image", r.Container.Image, "level", r.Assessment.Level.String(), "snapshot_target", opts.SnapshotTarget, "project", project)
-		res := u.ApplyWithOptions(ctx, r.Container.ID, r.Reference.String(), opts)
+		// Pass the SAME digest-pinned target the trust gate above just verified
+		// (pinnedRef(r), the identical helper used at the gate call ~30 lines up)
+		// rather than the unpinned r.Reference.String(). The real scanner never
+		// digest-pins Reference -- it stores the registry digest separately in
+		// RegistryDigest -- so passing Reference.String() here meant the updater's
+		// own verify-before-pull digest check (internal/updater/updater.go) would
+		// refuse EVERY real update once verify was enabled: it verified
+		// pinnedRef(r) but was asked to pull an unpinned tag. pinnedRef falls back
+		// to the unpinned ref when RegistryDigest is empty, so this stays
+		// fail-closed -- it never fabricates a digest pin that isn't there.
+		res := u.ApplyWithOptions(ctx, r.Container.ID, pinnedRef(r), opts)
 		oc := applyOutcome{
 			NewImage:   res.NewImage,
 			OldImage:   res.OldImage,
@@ -318,14 +327,38 @@ func adjustEventActions(events []notifier.Event, applyMap map[string]applyOutcom
 	}
 }
 
-// pinnedRef returns the digest-pinned reference the daemon will deploy, so the
-// trust gate verifies exactly the artifact being applied. When a registry
-// digest is known it is appended (repo:tag@sha256:...); cosign resolves by
-// digest regardless of the tag.
+// pinnedRef returns the ref that must be verified and applied for this scan
+// result. It is idempotent: whenever a freshly resolved RegistryDigest is
+// available, it ALWAYS reconstructs the pin from the repository + tag +
+// RegistryDigest, discarding any digest that may already be present on
+// r.Reference. It never trusts a pre-existing "@..." on Reference itself.
+//
+// Why this matters (self-pinning feedback loop): applying an update
+// rewrites the running container's Config.Image to a digest-pinned value
+// (internal/updater/updater.go's NewCreateConfigFromInspect via
+// internal/docker/write.go). On the NEXT scan, registry.Parse splits that
+// image back into a Reference whose Digest is now the (increasingly
+// stale) PREVIOUSLY-applied digest, while Tag is still populated -- so
+// the container remains apply-eligible. A pinnedRef that bailed out just
+// because the incoming ref already contained "@" would keep re-verifying
+// and re-pulling that STALE digest forever: PullImage pulls the digest
+// that's already running, the container is recreated identical, and the
+// pipeline reports ActionApplied/AutoUpdated even though nothing changed.
+// Containers would silently stop receiving security updates while the
+// audit trail and notifications kept claiming they were patched.
+//
+// So the digest on r.Reference is never trusted here -- only
+// r.RegistryDigest, which the scanner resolves fresh on every scan, is.
+// Only when RegistryDigest is empty do we fall back to the unpinned
+// r.Reference.String(); the updater refuses non-digest-pinned targets
+// when verify is enabled, so this stays fail-closed.
 func pinnedRef(r scanner.Result) string {
-	ref := r.Reference.String()
-	if r.RegistryDigest != "" && !strings.Contains(ref, "@") {
-		return ref + "@" + r.RegistryDigest
+	if r.RegistryDigest == "" {
+		return r.Reference.String()
 	}
-	return ref
+	ref := r.Reference.FullName()
+	if r.Reference.Tag != "" {
+		ref += ":" + r.Reference.Tag
+	}
+	return ref + "@" + r.RegistryDigest
 }
