@@ -240,3 +240,214 @@ func TestApplyPinnedRef_EmptyRegistryDigest_UpdaterRefusesFailClosed(t *testing.
 		t.Fatalf("pulls = %d, want 0 -- an empty RegistryDigest must never reach an unverifiable pull (fail-closed)", got)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Self-pinning feedback loop regression (found by adversarial review of
+// PR #85's original fix). See the pinnedRef doc comment in apply.go for
+// the full mechanism. Summary: applying an update rewrites the running
+// container's Config.Image to a digest-pinned value; on the NEXT scan,
+// registry.Parse folds that (now-stale) digest back into Reference while
+// RegistryDigest carries a freshly resolved digest. If pinnedRef bails
+// out just because the incoming ref already contains "@", it keeps
+// re-verifying and re-pulling the STALE digest forever -- the container
+// silently stops receiving updates while the audit trail and
+// notifications keep claiming it was patched.
+// ---------------------------------------------------------------------------
+
+// TestPinnedRef_Idempotent_UsesFreshDigestNotStaleReferenceDigest is the
+// core regression test. Reference already carries a STALE digest (as it
+// would after registry.Parse folds a previously-applied Config.Image back
+// in) while RegistryDigest carries a freshly resolved NEWER digest.
+// pinnedRef(r) must pin to NEW, not OLD.
+//
+// This test MUST FAIL against the pre-fix pinnedRef (which returned
+// r.Reference.String() unchanged whenever it already contained "@") --
+// verified manually by temporarily reverting the helper: it failed with
+// `pinnedRef = ".../sonarr:4.0.10-ls45@sha256:1111...1111", want
+// ".../sonarr:4.0.10-ls45@sha256:2222...2222"` (i.e. it returned the
+// STALE digest), then passed again once the helper was restored.
+func TestPinnedRef_Idempotent_UsesFreshDigestNotStaleReferenceDigest(t *testing.T) {
+	oldDigest := "sha256:" + strings.Repeat("1", 64)
+	newDigest := "sha256:" + strings.Repeat("2", 64)
+
+	// Simulates the SECOND scan after an apply: the scanner parsed the
+	// container's current (already digest-pinned, now-stale) Config.Image
+	// into Reference, and resolved a fresh RegistryDigest from the
+	// registry separately -- exactly as internal/scanner/scanner.go does.
+	ref, err := registry.Parse("lscr.io/linuxserver/sonarr:4.0.10-ls45@" + oldDigest)
+	if err != nil {
+		t.Fatalf("registry.Parse: %v", err)
+	}
+	r := scanner.Result{Reference: ref, RegistryDigest: newDigest}
+
+	got := pinnedRef(r)
+	want := "lscr.io/linuxserver/sonarr:4.0.10-ls45@" + newDigest
+	if got != want {
+		t.Fatalf("pinnedRef = %q, want %q -- must pin to the freshly resolved RegistryDigest, not whatever stale digest already happens to be on Reference (self-pinning feedback loop)", got, want)
+	}
+	if strings.Contains(got, oldDigest) {
+		t.Fatalf("pinnedRef returned the STALE digest %q instead of the fresh RegistryDigest %q -- self-pinning loop reproduced", oldDigest, newDigest)
+	}
+}
+
+// TestPinnedRef_Idempotent_SecondApplyDoesNotFreeze proves the fix holds
+// across repeated apply cycles, not just once: as RegistryDigest keeps
+// advancing across scans, pinnedRef keeps tracking it even though
+// Reference always shows up carrying whatever digest the PREVIOUS apply
+// pinned. Without the fix, the very first apply that bakes a digest into
+// Config.Image permanently freezes every subsequent apply on that one
+// digest -- this is the "second apply doesn't freeze" guarantee.
+func TestPinnedRef_Idempotent_SecondApplyDoesNotFreeze(t *testing.T) {
+	const repoTag = "lscr.io/linuxserver/sonarr:4.0.10-ls45"
+	d1 := "sha256:" + strings.Repeat("1", 64)
+	d2 := "sha256:" + strings.Repeat("2", 64)
+	d3 := "sha256:" + strings.Repeat("3", 64)
+
+	// Cycle 1: bare tag, nothing applied yet. RegistryDigest = d1.
+	ref0, err := registry.Parse(repoTag)
+	if err != nil {
+		t.Fatalf("registry.Parse: %v", err)
+	}
+	r1 := scanner.Result{Reference: ref0, RegistryDigest: d1}
+	if got, want := pinnedRef(r1), repoTag+"@"+d1; got != want {
+		t.Fatalf("cycle 1: pinnedRef = %q, want %q", got, want)
+	}
+
+	// Cycle 2: the apply from cycle 1 rewrote Config.Image to repoTag@d1;
+	// the next scan's registry.Parse folds d1 back into Reference. The
+	// registry has since advanced to d2.
+	ref1, err := registry.Parse(repoTag + "@" + d1)
+	if err != nil {
+		t.Fatalf("registry.Parse: %v", err)
+	}
+	r2 := scanner.Result{Reference: ref1, RegistryDigest: d2}
+	if got, want := pinnedRef(r2), repoTag+"@"+d2; got != want {
+		t.Fatalf("cycle 2 (second apply): pinnedRef = %q, want %q -- must not freeze on d1", got, want)
+	}
+
+	// Cycle 3: same story again -- the fix must keep working indefinitely,
+	// not just for one extra cycle.
+	ref2, err := registry.Parse(repoTag + "@" + d2)
+	if err != nil {
+		t.Fatalf("registry.Parse: %v", err)
+	}
+	r3 := scanner.Result{Reference: ref2, RegistryDigest: d3}
+	if got, want := pinnedRef(r3), repoTag+"@"+d3; got != want {
+		t.Fatalf("cycle 3 (third apply): pinnedRef = %q, want %q -- must not freeze", got, want)
+	}
+}
+
+// TestScanApply_SelfPinningLoop_SecondCycleTargetsFreshDigest is the
+// end-to-end regression test. It drives the same CLI path
+// (`bulwark scan --apply`) as TestScanApply_VerifyEnabled_UsesDigestPinnedRef,
+// but starts from a container whose LIVE image is already digest-pinned to
+// a stale digest -- exactly what a prior apply's write.go would have set
+// Config.Image to. It proves the ref handed to PullImage is the freshly
+// resolved RegistryDigest, not the stale digest already baked into the
+// container's current image.
+func TestScanApply_SelfPinningLoop_SecondCycleTargetsFreshDigest(t *testing.T) {
+	st, _ := store.Open(t.TempDir())
+	rec := &recordingNotifier{name: "test", min: types.RiskSafe}
+
+	oldDigest := "sha256:" + strings.Repeat("1", 64)
+	newDigest := "sha256:" + strings.Repeat("2", 64)
+	const repoTag = "lscr.io/linuxserver/sonarr:4.0.10-ls45"
+	const repoNoTag = "lscr.io/linuxserver/sonarr"
+	// The container's CURRENT live image is already digest-pinned to a
+	// STALE digest -- exactly what a prior apply would have set
+	// Config.Image to.
+	liveImage := repoTag + "@" + oldDigest
+
+	fd := &fakeDocker{
+		containers: []docker.Container{{
+			ID: "old-id", Name: "sonarr",
+			Image:   liveImage,
+			ImageID: "sha256:l1",
+			Labels:  map[string]string{},
+		}},
+		images: map[string]*docker.ImageInspect{
+			"sha256:l1": {RepoDigests: []string{repoNoTag + "@" + oldDigest}},
+		},
+	}
+	// The registry resolves the CURRENT (already stale-pinned) ref -- the
+	// scanner always resolves whatever registry.Parse(c.Image) produced;
+	// the key must match ref.String() exactly.
+	fr := &fakeRegistry{digests: map[string]string{liveImage: newDigest}}
+
+	stubDoc := &stubUpdaterDocker{
+		startupHealth: docker.HealthHealthy,
+		containers: map[string]*docker.ContainerInspect{
+			"old-id": {
+				ID:              "old-id",
+				Name:            "/sonarr",
+				ImageRef:        liveImage,
+				Running:         true,
+				Health:          docker.HealthNone,
+				Config:          json.RawMessage(`{"Image":"` + liveImage + `","Env":["TZ=UTC"]}`),
+				HostConfig:      json.RawMessage(`{"Binds":["/data:/data"]}`),
+				NetworkSettings: json.RawMessage(`{"Networks":{"media":{}}}`),
+			},
+		},
+	}
+
+	recVerify := &recordingVerifier{inner: permissiveGate()}
+	upd := &updater.Updater{
+		Docker:         stubDoc,
+		Verify:         recVerify,
+		HealthTimeout:  100 * time.Millisecond,
+		HealthInterval: 1 * time.Millisecond,
+		StartupGrace:   1 * time.Millisecond,
+	}
+
+	deps := scanDeps{
+		Docker:    fd,
+		Registry:  fr,
+		Notifiers: []notifier.Notifier{rec},
+		Store:     st,
+		Updater:   upd,
+		Now:       func() time.Time { return time.Date(2026, 5, 1, 9, 0, 0, 0, time.UTC) },
+	}
+	var stdout, stderr bytes.Buffer
+	err := cmdScanWith(
+		[]string{"--no-fetch-notes", "--no-color", "--notify", "--apply"},
+		&stdout, &stderr, deps,
+	)
+	if err != nil {
+		t.Fatalf("scan: %v\nstderr: %s", err, stderr.String())
+	}
+
+	wantRef := repoTag + "@" + newDigest
+
+	if got := atomic.LoadInt32(&stubDoc.pulls); got != 1 {
+		t.Fatalf("pulls = %d, want 1 (second-cycle apply must not spuriously refuse or silently no-op); stdout=%s stderr=%s",
+			got, stdout.String(), stderr.String())
+	}
+
+	stubDoc.pullMu.Lock()
+	pulled := append([]string(nil), stubDoc.pullOrder...)
+	stubDoc.pullMu.Unlock()
+	if len(pulled) != 1 {
+		t.Fatalf("pullOrder = %v, want exactly one entry", pulled)
+	}
+
+	// This is the crux of the self-pinning regression: the ref pulled
+	// must be the FRESHLY resolved digest, not the stale one already
+	// baked into the container's live image.
+	if pulled[0] != wantRef {
+		t.Fatalf("pulled ref = %q, want %q -- must target the freshly resolved digest, not the stale already-running one (self-pinning feedback loop)", pulled[0], wantRef)
+	}
+	if strings.Contains(pulled[0], oldDigest) {
+		t.Fatalf("pulled ref %q still carries the STALE digest %q -- update freeze reproduced", pulled[0], oldDigest)
+	}
+
+	if evaluated := recVerify.lastEvaluated(); evaluated != pulled[0] {
+		t.Fatalf("verified ref %q != pulled ref %q", evaluated, pulled[0])
+	}
+
+	if len(rec.got) != 1 {
+		t.Fatalf("dispatched events = %d, want 1; output: %s", len(rec.got), stdout.String())
+	}
+	if rec.got[0].Action != types.ActionAutoUpdated {
+		t.Errorf("event action = %v, want AutoUpdated (proves the second-cycle apply succeeded, not silently frozen)", rec.got[0].Action)
+	}
+}
