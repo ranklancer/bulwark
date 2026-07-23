@@ -7,11 +7,16 @@ import (
 	"encoding/hex"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func newRelay(t *testing.T, upstreamURL string, secret []byte, bearer string) *relayHandler {
@@ -163,5 +168,93 @@ func TestRun_RejectsMissingFlags(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if err := run([]string{"--listen", ":0"}, &stdout, &stderr); err == nil {
 		t.Error("expected error for missing --upstream / --secret-file")
+	}
+}
+
+// TestRun_ListenerStartsAndShutsDownCleanly drives run() through a full
+// listener lifecycle -- start, accept, graceful shutdown -- so goleak has a
+// real goroutine to verify is cleaned up. Without this test, the relay's
+// TestMain goleak.VerifyTestMain guard is vacuous: TestRun_RejectsMissingFlags
+// is the only other test that calls run(), and it deliberately supplies
+// incomplete flags so it returns before the srv.ListenAndServe() goroutine
+// is ever spawned.
+func TestRun_ListenerStartsAndShutsDownCleanly(t *testing.T) {
+	// run() takes --listen as an opaque address string and never reports
+	// back the actual bound port, so ":0" isn't pollable from a test. We
+	// reserve a free ephemeral port ourselves (bind, read Addr(), close)
+	// and hand that concrete address to run() instead of hardcoding a
+	// fixed port that could collide with another test or process.
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve ephemeral port: %v", err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatalf("release probe listener: %v", err)
+	}
+
+	secretFile := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(secretFile, []byte("topsecret"), 0o600); err != nil {
+		t.Fatalf("write secret file: %v", err)
+	}
+
+	args := []string{
+		"--listen", addr,
+		"--upstream", "https://relay.example.com/api/v1/webhooks/diun",
+		"--secret-file", secretFile,
+	}
+
+	var stdout, stderr bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- run(args, &stdout, &stderr)
+	}()
+
+	// Poll /healthz until the listener goroutine is actually accepting.
+	// DisableKeepAlives avoids leaving an idle pooled connection (and its
+	// background read/write-loop goroutines) around for goleak to trip
+	// over independently of the thing we're actually testing.
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+		Timeout:   2 * time.Second,
+	}
+	healthURL := "http://" + addr + "/healthz"
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, getErr := client.Get(healthURL)
+		if getErr == nil {
+			_ = resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("listener never became ready at %s: %v", healthURL, getErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Trigger the SAME graceful-shutdown path production uses: run()
+	// installs signal.NotifyContext for os.Interrupt/SIGTERM before it
+	// starts the listener goroutine (confirmed by the /healthz poll
+	// above succeeding only after that registration happens), so send
+	// this process a real SIGTERM rather than reaching into run()'s
+	// internals.
+	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
+		t.Fatalf("send SIGTERM: %v", err)
+	}
+
+	// Join run()'s return so the listener goroutine is fully torn down
+	// before the test ends -- this is what makes TestMain's
+	// goleak.VerifyTestMain load-bearing for this package: if graceful
+	// shutdown regresses, run() (and its listener goroutine) never
+	// returns/exits and goleak fails the suite.
+	select {
+	case runErr := <-done:
+		if runErr != nil {
+			t.Fatalf("run() returned error after graceful shutdown: %v", runErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run() did not return within 5s of SIGTERM; listener goroutine may be leaking")
 	}
 }
