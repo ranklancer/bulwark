@@ -81,3 +81,6 @@ cover:
 #   - sec : 21 gosec findings in the capture/store/registry security paths
 #           need triage (fix or #nosec rationale). See internal engineering notes.
 gate-full: gate lint cover
+
+bench: ## run a hardening tier perf baselines (verify gate / registry parse / cve assess)
+	go test -bench=. -benchmem -run=^$$ ./internal/verify/ ./internal/registry/ ./internal/cve/
