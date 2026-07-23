@@ -105,5 +105,5 @@ func TestTrimDigestDigestOf_AtBoundary_KillsBoundary(t *testing.T) {
 // (killed 70 -> 78, lived 11 -> 5, not-covered 18 -> 16). The 5 residual LIVED
 // are all provably-equivalent boundary mutants and cannot be killed:
 // assess.go:49 (max-track, >=), assess.go:56 (guarded by si!=sj), assess.go:58
-// (deduped distinct IDs, < == <=), dockerscout.go:88 and registry_advisory.go:75
+// (closed IDs are deduped by the seen-map guard in AssessUpgrade so they are distinct; < is equivalent to <=), dockerscout.go:88 and registry_advisory.go:75
 // (dedup keep-max, >=).
