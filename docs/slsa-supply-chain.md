@@ -10,8 +10,10 @@ it. Ties to the pre-public hardening backlog items **a hardening tier / a harden
 - SHA-256 `checksums.txt`; CycloneDX SBOM per archive (syft).
 - Keyless **cosign** signature over `checksums.txt` (Sigstore, OIDC).
 - Draft release for human review.
-- **OpenSSF Scorecard** workflow (`.github/workflows/scorecard.yml`) — added here,
-  SHA-pinned; publishes the Scorecard badge + SARIF once the repo is public.
+- **OpenSSF Scorecard** workflow -- **staged, not yet active.** The complete,
+  SHA-pinned file lives at `docs/ci/scorecard.yml` (see the Ready-to-commit section below);
+  it cannot be pushed to `.github/workflows/` without a workflow-scoped token, and it
+  publishes the Scorecard badge + SARIF once the repo is public.
 
 ## Gaps to close (staged; land needs the workflow-scoped token)
 
