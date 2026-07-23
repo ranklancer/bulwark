@@ -1,0 +1,42 @@
+goos: linux
+goarch: amd64
+pkg: github.com/ranklancer/bulwark/internal/verify
+cpu: AMD Ryzen 7 7700 8-Core Processor              
+BenchmarkGateEvaluate_Disabled-16       	48465598	        21.35 ns/op	      16 B/op	       1 allocs/op
+BenchmarkGateEvaluate_Disabled-16       	53671251	        23.04 ns/op	      16 B/op	       1 allocs/op
+BenchmarkGateEvaluate_Disabled-16       	54496144	        21.33 ns/op	      16 B/op	       1 allocs/op
+BenchmarkGateEvaluate_Disabled-16       	53588762	        21.34 ns/op	      16 B/op	       1 allocs/op
+BenchmarkGateEvaluate_Disabled-16       	54168566	        22.15 ns/op	      16 B/op	       1 allocs/op
+BenchmarkGateEvaluate_Disabled-16       	53053158	        22.72 ns/op	      16 B/op	       1 allocs/op
+BenchmarkGateEvaluate_SignedClean-16    	 9912603	       123.4 ns/op	     131 B/op	       2 allocs/op
+BenchmarkGateEvaluate_SignedClean-16    	10541052	       145.3 ns/op	     146 B/op	       2 allocs/op
+BenchmarkGateEvaluate_SignedClean-16    	10849177	       130.4 ns/op	     143 B/op	       2 allocs/op
+BenchmarkGateEvaluate_SignedClean-16    	11442891	       132.4 ns/op	     138 B/op	       2 allocs/op
+BenchmarkGateEvaluate_SignedClean-16    	11096931	       133.6 ns/op	     141 B/op	       2 allocs/op
+BenchmarkGateEvaluate_SignedClean-16    	10161940	       124.9 ns/op	     129 B/op	       2 allocs/op
+PASS
+ok  	github.com/ranklancer/bulwark/internal/verify	16.301s
+goos: linux
+goarch: amd64
+pkg: github.com/ranklancer/bulwark/internal/registry
+cpu: AMD Ryzen 7 7700 8-Core Processor              
+BenchmarkParse-16    	 7486785	       167.9 ns/op	      32 B/op	       2 allocs/op
+BenchmarkParse-16    	 7240981	       159.6 ns/op	      32 B/op	       2 allocs/op
+BenchmarkParse-16    	 7602067	       158.5 ns/op	      32 B/op	       2 allocs/op
+BenchmarkParse-16    	 7330298	       159.7 ns/op	      32 B/op	       2 allocs/op
+BenchmarkParse-16    	 7678065	       156.0 ns/op	      32 B/op	       2 allocs/op
+BenchmarkParse-16    	 7537708	       158.4 ns/op	      32 B/op	       2 allocs/op
+PASS
+ok  	github.com/ranklancer/bulwark/internal/registry	8.163s
+goos: linux
+goarch: amd64
+pkg: github.com/ranklancer/bulwark/internal/cve
+cpu: AMD Ryzen 7 7700 8-Core Processor              
+BenchmarkAssessUpgrade-16    	 4419490	       276.6 ns/op	     344 B/op	       7 allocs/op
+BenchmarkAssessUpgrade-16    	 4352053	       287.4 ns/op	     344 B/op	       7 allocs/op
+BenchmarkAssessUpgrade-16    	 4318173	       272.7 ns/op	     344 B/op	       7 allocs/op
+BenchmarkAssessUpgrade-16    	 4399024	       282.0 ns/op	     344 B/op	       7 allocs/op
+BenchmarkAssessUpgrade-16    	 4422490	       274.2 ns/op	     344 B/op	       7 allocs/op
+BenchmarkAssessUpgrade-16    	 4373466	       274.1 ns/op	     344 B/op	       7 allocs/op
+PASS
+ok  	github.com/ranklancer/bulwark/internal/cve	11.090s
