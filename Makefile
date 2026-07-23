@@ -80,4 +80,4 @@ cover:
 #           level, which collides with GOTOOLCHAIN=local — an infra call for the maintainer.
 #   - sec : 21 gosec findings in the capture/store/registry security paths
 #           need triage (fix or #nosec rationale). See internal engineering notes.
-gate-full: gate lint cover
+gate-full: gate lint cover smoke
