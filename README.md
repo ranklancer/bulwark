@@ -3,7 +3,7 @@
 [![CI](https://github.com/ranklancer/bulwark/actions/workflows/ci.yml/badge.svg)](https://github.com/ranklancer/bulwark/actions/workflows/ci.yml)
 [![Secret scan](https://github.com/ranklancer/bulwark/actions/workflows/gitleaks.yml/badge.svg)](https://github.com/ranklancer/bulwark/actions/workflows/gitleaks.yml)
 [![Go 1.22](https://img.shields.io/badge/go-1.22-00ADD8.svg)](go.mod)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue.svg)](LICENSE)
 
 > **Don't just update. Understand what changed — then prove it's trusted before you apply it.**
 
@@ -625,4 +625,4 @@ CI and in the pre-commit hook (install with `./scripts/install-hooks.sh`):
 
 ## License
 
-[MIT](LICENSE).
+Bulwark is licensed under the **GNU Affero General Public License, version 3.0 only** ([AGPL-3.0-only](LICENSE)). A commercial dual-license is available for organizations that cannot accept the AGPL terms — see [`NOTICE`](NOTICE). Copyright (C) 2026 ranklancer.
