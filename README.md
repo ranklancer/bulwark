@@ -1,3 +1,7 @@
+<p align="center">
+          <img src="assets/logo-dark.svg" alt="Bulwark - Rampart (Forerunner mark)" width="200" height="200">
+</p>
+
 # Bulwark
 
 [![CI](https://github.com/ranklancer/bulwark/actions/workflows/ci.yml/badge.svg)](https://github.com/ranklancer/bulwark/actions/workflows/ci.yml)
