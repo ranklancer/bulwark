@@ -1,5 +1,5 @@
 # Bulwark developer targets.
-.PHONY: build test vet fmt gate smoke tools lint vuln sec cover gate-full
+.PHONY: build test vet fmt gate smoke tools lint vuln sec cover gate-full fuzz
 
 build:
 	go build ./...
@@ -84,3 +84,21 @@ gate-full: gate lint cover
 
 bench: ## run a hardening tier perf baselines (verify gate / registry parse / cve assess)
 	go test -bench=. -benchmem -run=^$$ ./internal/verify/ ./internal/registry/ ./internal/cve/
+
+# Fuzz the untrusted-input parsers (advisory; short in CI via FUZZTIME).
+# Restores `make fuzz`, which expanded.yml (fuzz (short)) invokes -- bulwark
+# previously had no fuzz target so the CI step errored "No rule to make target".
+FUZZTIME ?= 15s
+fuzz:
+	@echo "advisory: native fuzz targets, $(FUZZTIME) each; not part of gate-full blocking path"
+	go test -run '^$$' -fuzz='^FuzzParseReference$$' -fuzztime=$(FUZZTIME) ./internal/registry/
+	go test -run '^$$' -fuzz='^FuzzParseOSVResults$$' -fuzztime=$(FUZZTIME) ./internal/cve/
+	go test -run '^$$' -fuzz='^FuzzParseTrivyReport$$' -fuzztime=$(FUZZTIME) ./internal/cve/
+	go test -run '^$$' -fuzz='^FuzzParseGrypeReport$$' -fuzztime=$(FUZZTIME) ./internal/cve/
+	go test -run '^$$' -fuzz='^FuzzParseDockerScoutSARIF$$' -fuzztime=$(FUZZTIME) ./internal/cve/
+	go test -run '^$$' -fuzz='^FuzzConfigLoad$$' -fuzztime=$(FUZZTIME) ./internal/config/
+	go test -run '^$$' -fuzz='^FuzzImageRefsFromUnraidBytes$$' -fuzztime=$(FUZZTIME) ./internal/capture/
+	go test -run '^$$' -fuzz='^FuzzImageRefsFromQuadletBytes$$' -fuzztime=$(FUZZTIME) ./internal/capture/
+	go test -run '^$$' -fuzz='^FuzzImageRefsFromComposeBytes$$' -fuzztime=$(FUZZTIME) ./internal/capture/
+	go test -run '^$$' -fuzz='^FuzzComposeParse$$' -fuzztime=$(FUZZTIME) ./internal/capture/
+	go test -run '^$$' -fuzz='^FuzzStacksDirFromDockgeCompose$$' -fuzztime=$(FUZZTIME) ./internal/capture/
