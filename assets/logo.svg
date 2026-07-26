@@ -1,12 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <defs>
-    <linearGradient id="cy" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0"   stop-color="#9DF7FF"/>
-      <stop offset="0.5" stop-color="#3ED6F2"/>
-      <stop offset="1"   stop-color="#0E9FC4"/>
-    </linearGradient>
-  </defs>
-  <g fill="none" stroke="url(#cy)" stroke-linejoin="round" stroke-linecap="round">
+  <g fill="none" stroke="#3ED6F2" stroke-linejoin="round" stroke-linecap="round">
     <polygon points="160,136 352,136 426,256 352,376 160,376 86,256" stroke-width="9"/>
     <polygon points="177,158 335,158 395,256 335,354 177,354 117,256" stroke-width="4" opacity="0.55"/>
     <polyline points="259,190 185,256 259,322" stroke-width="9"/>
