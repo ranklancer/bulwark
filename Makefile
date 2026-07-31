@@ -28,7 +28,7 @@ smoke:
 # Versions are PINNED. The dev box bakes Go 1.22.12 with GOTOOLCHAIN=local,
 # so `@latest` (which now requires Go >= 1.23) fails the toolchain gate. Bump
 # these deliberately. Install with `make tools`.
-GOLANGCI_LINT_VERSION ?= v1.61.0
+GOLANGCI_LINT_VERSION ?= v1.64.8
 GOVULNCHECK_VERSION   ?= v1.1.4
 GOSEC_VERSION         ?= v2.20.0
 COVER_MIN             ?= 74.0
