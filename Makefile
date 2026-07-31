@@ -1,5 +1,5 @@
 # Bulwark developer targets.
-.PHONY: build test vet fmt gate smoke tools lint vuln sec cover gate-full fuzz
+.PHONY: build test vet fmt gate smoke tools lint vuln sec cover gate-full fuzz integration
 
 build:
 	go build ./...
@@ -102,3 +102,11 @@ fuzz:
 	go test -run '^$$' -fuzz='^FuzzImageRefsFromComposeBytes$$' -fuzztime=$(FUZZTIME) ./internal/capture/
 	go test -run '^$$' -fuzz='^FuzzComposeParse$$' -fuzztime=$(FUZZTIME) ./internal/capture/
 	go test -run '^$$' -fuzz='^FuzzStacksDirFromDockgeCompose$$' -fuzztime=$(FUZZTIME) ./internal/capture/
+
+# Acceptance/integration lane (testcontainers-go; opt-in build tag).
+# Deliberately SEPARATE from `gate`/`gate-full` -- it is not part of the
+# blocking PR path (see .github/workflows/integration.yml, which never
+# triggers on pull_request). Requires Docker. Run locally with:
+#   make integration
+integration:
+	go test -tags=integration -race -count=1 ./test/integration/...
