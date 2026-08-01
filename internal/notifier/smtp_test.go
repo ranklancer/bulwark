@@ -19,8 +19,8 @@ type capturedMail struct {
 	Message string
 }
 
-func captureSend(c *capturedMail) func(string, smtp.Auth, string, []string, []byte) error {
-	return func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+func captureSend(c *capturedMail) func(context.Context, string, smtp.Auth, string, []string, []byte) error {
+	return func(_ context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
 		c.Addr = addr
 		c.Auth = auth
 		c.From = from
