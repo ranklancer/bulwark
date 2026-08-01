@@ -1,9 +1,14 @@
 # Bulwark golangci-lint configuration.
 #
-# Pinned to golangci-lint v1.61.0 (built with go1.22.x). The dev box bakes
-# Go 1.22.12 with GOTOOLCHAIN=local, so the linter is installed at a matching
-# pinned version — never @latest (which requires Go >= 1.23 and fails the
-# local toolchain gate). See `make lint`.
+# Pinned to golangci-lint v1.64.8 — the final v1.x release (built with
+# go1.23.x), matching GOLANGCI_LINT_VERSION in the Makefile and the CI
+# `lint` job (never @latest, which now resolves to the v2 line and its
+# breaking config schema).
+#
+# Bumped 2026-07-30: v1.61.0 (built with go1.22.x) predated the go1.26.5
+# toolchain pin and could not reliably drive `go list`
+# once `lint` became a blocking CI gate in this PR — it had only ever run
+# advisory/local before, so the staleness went unnoticed. See `make lint`.
 run:
   timeout: 5m
   tests: true

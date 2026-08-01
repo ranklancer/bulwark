@@ -45,6 +45,23 @@ jobs:
       - name: Test
         run: go test -race -count=1 ./...
 
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+
+      - name: Install golangci-lint (pinned; matches `make tools`)
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
+      - name: Lint (canonical `make lint`)
+        run: make lint
+
   pii-scan:
     name: pii scan
     runs-on: ubuntu-latest
