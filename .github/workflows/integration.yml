@@ -1,0 +1,39 @@
+name: integration
+
+# Acceptance/integration lane (runs post-merge and nightly). Deliberately kept
+# OFF pull_request to protect the fast PR gate (<~10 min target) -- this lane
+# pulls and boots real containers via
+# testcontainers-go and is expected to be slower, and occasionally flakier,
+# than the unit/fuzz lanes. Mirrors expanded.yml's trigger shape (push-to-main
+# + cron) rather than ci.yml's (push + pull_request). Runs post-merge on
+# main, nightly, and on-demand via workflow_dispatch.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"  # nightly; offset from expanded.yml's weekly "25 5 * * 1"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    name: integration (testcontainers-go)
+    runs-on: ubuntu-latest  # Docker Engine ships preinstalled on GitHub-hosted ubuntu-latest runners
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version: "1.26.5"
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Docker sanity check
+        run: docker version
+
+      - name: Run integration lane
+        run: make integration
