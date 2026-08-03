@@ -630,3 +630,4 @@ CI and in the pre-commit hook (install with `./scripts/install-hooks.sh`):
 ## License
 
 Bulwark is licensed under the **GNU Affero General Public License, version 3.0 only** ([AGPL-3.0-only](LICENSE)). A commercial dual-license is available for organizations that cannot accept the AGPL terms — see [`NOTICE`](NOTICE). Copyright (C) 2026 ranklancer.
+<!-- produce-proof: ticket=20260803a -->
