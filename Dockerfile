@@ -9,7 +9,7 @@
 # Global build args — declared before the first FROM so they are in scope
 # for every FROM line (Docker ARG scoping: pre-first-FROM args are global).
 ARG NODE_VERSION=22
-ARG GO_VERSION=1.22
+ARG GO_VERSION=1.26.5
 
 # Stage 1: Build the React dashboard.
 FROM node:${NODE_VERSION}-alpine AS web
