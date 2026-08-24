@@ -9,7 +9,7 @@ require gopkg.in/yaml.v3 v3.0.1
 require github.com/andybalholm/brotli v1.2.2
 
 require (
-	github.com/testcontainers/testcontainers-go v0.34.1
+	github.com/testcontainers/testcontainers-go v0.44.0
 	go.uber.org/goleak v1.3.0
 )
 
