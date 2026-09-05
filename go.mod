@@ -6,7 +6,7 @@ toolchain go1.26.5
 
 require gopkg.in/yaml.v3 v3.0.1
 
-require github.com/andybalholm/brotli v1.2.2
+require github.com/andybalholm/brotli v1.2.3
 
 require (
 	github.com/testcontainers/testcontainers-go v0.34.1
