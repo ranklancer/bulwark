@@ -1,5 +1,5 @@
 # Bulwark developer targets.
-.PHONY: build test vet fmt gate smoke tools lint vuln sec cover gate-full fuzz integration
+.PHONY: build test vet fmt gate smoke tools lint vuln sec cover gate-full fuzz integration check-commit-identity
 
 build:
 	go build ./...
@@ -15,7 +15,12 @@ fmt:
 	if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 
 # Full local gate mirroring CI's Go checks.
-gate: fmt vet build test
+gate: fmt vet build test check-commit-identity
+
+# Commit-identity gate: negative test proving the check rejects unregistered
+# @users.noreply.github.com addresses (see docs/ci/commit-identity-check.md).
+check-commit-identity:
+	bash scripts/test-commit-identity.sh
 
 # End-to-end smoke suite: builds the real binary and drives capture / pin /
 # canary against hermetic fixtures (no network, no Docker). See smoke/run.sh.
