@@ -82,6 +82,10 @@ if [[ -n "$email_findings" ]]; then
     function email_allowed(addr) {
         if (addr ~ /@example\.(com|org|net)$/) return 1;
         if (addr ~ /^noreply@/) return 1;
+        # GitHub noreply addresses (id+username@users.noreply.github.com) are
+        # pseudonymous by design — the commit-identity gate requires them, and
+        # the negative-test fixtures for that gate are literal examples.
+        if (addr ~ /@users\.noreply\.github\.com$/) return 1;
         return 0;
     }
     {

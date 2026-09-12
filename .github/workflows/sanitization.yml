@@ -27,7 +27,6 @@ jobs:
       - name: Commit identity (author + committer must be GitHub noreply email)
         run: |
           set -euo pipefail
-          pattern='^noreply@github\.com$|@users\.noreply\.github\.com$'
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             range="${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}"
             single=""
@@ -39,20 +38,11 @@ jobs:
               range="${before}..${{ github.sha }}"; single=""
             fi
           fi
-          bad=0
-          check_one() {
-            h="$1"; ae="$2"; ce="$3"
-            short="$(git rev-parse --short "$h")"
-            printf '%s' "$ae" | grep -qiE "$pattern" || { echo "::error::commit ${short}: author email '${ae}' is not a GitHub noreply address" >&2; bad=1; }
-            printf '%s' "$ce" | grep -qiE "$pattern" || { echo "::error::commit ${short}: committer email '${ce}' is not a GitHub noreply address" >&2; bad=1; }
-          }
           if [ -n "$single" ]; then
-            while read -r h ae ce; do [ -z "$h" ] && continue; check_one "$h" "$ae" "$ce"; done < <(git log -1 --format='%H %ae %ce' "$single")
+            git log -1 --format='%H %ae %ce' "$single" | bash scripts/commit-identity-check.sh
           else
-            while read -r h ae ce; do [ -z "$h" ] && continue; check_one "$h" "$ae" "$ce"; done < <(git rev-list "$range" --format='%H %ae %ce' | grep -v '^commit ')
+            git rev-list "$range" --format='%H %ae %ce' | grep -v '^commit ' | bash scripts/commit-identity-check.sh
           fi
-          [ "$bad" -eq 0 ] || { echo "::error::commit-identity check FAILED" >&2; exit 1; }
-          echo "commit-identity: OK"
 
       - name: Internal disclosure scan (homelab domain / 192.168.1.x subnet)
         run: |
