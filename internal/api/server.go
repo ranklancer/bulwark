@@ -92,7 +92,8 @@ func NewServer(addr string, diun *DIUNHandler, state *StateHandler, limiter *Rat
 // errors. On context cancellation, in-flight requests are given up to
 // shutdownTimeout to drain before the listener is closed forcibly.
 func (s *Server) Run(ctx context.Context, shutdownTimeout time.Duration) error {
-	listener, err := net.Listen("tcp", s.HTTPServer.Addr)
+	lc := &net.ListenConfig{}
+	listener, err := lc.Listen(ctx, "tcp", s.HTTPServer.Addr)
 	if err != nil {
 		return fmt.Errorf("api: listen %s: %w", s.HTTPServer.Addr, err)
 	}

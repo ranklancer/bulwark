@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"mime"
+	"net"
 	"net/mail"
 	"net/smtp"
 	"strings"
@@ -47,7 +48,7 @@ type SMTPNotifier struct {
 
 	// Send is the mail-sending hook. nil means use the default
 	// net/smtp transport.
-	Send func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error
+	Send func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error
 
 	// Now is injected for deterministic tests; nil = time.Now.
 	Now func() time.Time
@@ -177,7 +178,7 @@ func (s *SMTPNotifier) Notify(ctx context.Context, events []Event) error {
 	if send == nil {
 		send = smtpSendFunc(s.UseTLS)
 	}
-	if err := send(addr, auth, s.From, s.To, msg); err != nil {
+	if err := send(ctx, addr, auth, s.From, s.To, msg); err != nil {
 		return fmt.Errorf("smtp: send: %w", err)
 	}
 	return nil
@@ -190,23 +191,44 @@ func (s *SMTPNotifier) now() time.Time {
 	return time.Now()
 }
 
-// smtpSendFunc returns a transport that uses STARTTLS when useTLS is
-// true. The default net/smtp.SendMail handles plain or STARTTLS transparently
+// smtpDialTimeout bounds the TCP/TLS dial to an SMTP server so a dead or
+// slow relay cannot hang the notifier, which runs precisely when the system
+// is already unhealthy. Overall cancellation is governed by the caller
+// context threaded through Send.
+const smtpDialTimeout = 10 * time.Second
+
+// smtpSendFunc returns a transport. When useTLS is true it uses implicit TLS
+// (dial-then-TLS, e.g. :465). Otherwise net/smtp.SendMail handles plain or STARTTLS transparently
 // when the server advertises STARTTLS in EHLO; the explicit dial-then-tls
 // path is taken only when the operator has flagged it.
-func smtpSendFunc(useTLS bool) func(string, smtp.Auth, string, []string, []byte) error {
+func smtpSendFunc(useTLS bool) func(context.Context, string, smtp.Auth, string, []string, []byte) error {
 	if !useTLS {
-		return smtp.SendMail
+		return func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			// net/smtp.SendMail refuses to send AUTH over an unencrypted link; keep it.
+			// NOTE: SendMail's internal dial is unbounded, so a plaintext send to a
+			// dead relay can still hang (tracked follow-up); ctx short-circuits pre-dial.
+			return smtp.SendMail(addr, auth, from, to, msg)
+		}
 	}
-	return func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+	return func(ctx context.Context, addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
 		host, _, err := splitHostPort(addr)
 		if err != nil {
 			return err
 		}
-		conn, err := tls.Dial("tcp", addr, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+		dialer := &tls.Dialer{
+			NetDialer: &net.Dialer{Timeout: smtpDialTimeout},
+			Config:    &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12},
+		}
+		conn, err := dialer.DialContext(ctx, "tcp", addr)
 		if err != nil {
 			return err
 		}
+		// Client.Quit does not close the conn if QUIT errors (half-dead relay);
+		// back it up so the socket fd is always released.
+		defer func() { _ = conn.Close() }()
 		client, err := smtp.NewClient(conn, host)
 		if err != nil {
 			_ = conn.Close()
