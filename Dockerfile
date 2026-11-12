@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.6
+# syntax=docker/dockerfile:1.29@sha256:572cebbc2b15e6f84c077742952674889cb63cd5e9b80abdffcbe587b6f19183
 #
 # Multi-stage build: Node compiles the React dashboard, Go embeds the
 # resulting bundle and produces the daemon binary. The committed
@@ -55,7 +55,7 @@ RUN go build \
 # Stage 3: Minimal runtime. ca-certificates for TLS to registries;
 # tzdata so the cron + maintenance-window evaluator handles local time
 # correctly when the operator sets TZ.
-FROM alpine:3.20
+FROM alpine:3.24@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 RUN apk add --no-cache ca-certificates tzdata && \
     addgroup -S bulwark && adduser -S -G bulwark bulwark && \
     mkdir -p /config /data && chown -R bulwark:bulwark /config /data
